@@ -65,9 +65,6 @@ set API(Domains/JQ) {
 	set r [jQ postscript $r {
 	    /* this is javascript */
 	}]
-	set r [jQ postscript $r [<ready> {
-	    /* this is javascript which will be run only when jQuery is ready */
-	}]]
 
 	=== Example: ajax form ===
 
