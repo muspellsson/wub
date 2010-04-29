@@ -55,25 +55,6 @@ set API(Domains/JQ) {
 
 	== General API ==
 	jQ package exports functions to load and invoke jQ plugins
-
-	== Examples ==
-	The following assume that the response ''r'' contains x-text/html-fragment style html
-
-	=== Example: arbitrary javascript over jQuery ===
-
-	set r [jQ jquery $r]	;# load the jquery library
-	set r [jQ postscript $r {
-	    /* this is javascript */
-	}]
-
-	=== Example: ajax form ===
-
-	# apply form plugin to ''formid''
-	set r [[jQ form $r "#formid" target \"#divid\"]]
-
-	# emit a form with the id ''formid'' and a div with the id ''divid''
-	# the returned result of submitting ''formid'' will replace the content of ''divid''
-	return [Http Ok $r "[<form> formid {...}] [<div> divid {...}]" x-text/html-fragment]
     }
     expires {when do these javascript files expire?}
     google {use the google versions of jQuery wherever possible}
