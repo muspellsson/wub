@@ -9,7 +9,7 @@ set API(Domains/About) {
     {Domain for accessing API documentation of other domains.}
 }
 
-set APIDomains {File Repo Mason Direct Dub Commenter JQ CGI Icons Tub Login About RAM Tie Coco Sinorca Simplicio Nub}
+set APIDomains {File Repo Mason Direct Dub Commenter JQ CGI Icons Tub ReCAPTCHA About RAM Tie Coco Sinorca Simplicio Nub Sql SqlQ Sticky Tiny}
 
 namespace eval About {
     variable ctype x-text/html-fragment
@@ -78,7 +78,7 @@ namespace eval About {
 		} res eo]} {
 		    append result $res \n
 		} else {
-		    #puts stderr "API ERR: $res ($eo) ($doc)"
+		    Debug.about {API ERR: $res ($eo) ($doc)}
 		    append result [<h2> $n] \n [<p> [<a> href .. (Parent)]] [<p> $v] \n
 		}
 	    } else {
