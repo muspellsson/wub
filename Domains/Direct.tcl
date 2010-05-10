@@ -56,7 +56,7 @@ class create Direct {
     variable namespace object class ctype mount wildcard trim methods
 
     method do_ns {rsp} {
-	Debug.direct {do direct $namespace $mount $ctype}
+	Debug.direct {do direct $namespace $mount $ctype [dict get $rsp -suffix]}
 	
 	# search for a matching command prefix
 	set cmd ""
