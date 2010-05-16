@@ -336,7 +336,9 @@ namespace eval Httpd {
 	    dict set reply -charset $charset
 	    dict set reply -chconverted $charset
 	    dict set reply content-type "$ct; charset=$charset"
-	    dict set reply -content [encoding convertto $charset [dict get $reply -content]]
+	    if {[string tolower $charset] ne [encoding system]} {
+		dict set reply -content [encoding convertto $charset [dict get $reply -content]]
+	    }
 	}
 	return $reply
     }
