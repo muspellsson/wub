@@ -501,12 +501,12 @@ class create ::Direct {
 		}
 	    } elseif {[llength $itcl]%2} {
 		# construct named object
-		Debug.direct {[lindex $itcl 0] create #auto {*}[lrange $itcl 1 end] mount $mount}
-		set itcl [[lindex $itcl 0] create #auto {*}[lrange $itcl 1 end] mount $mount]
+		Debug.direct {[lindex $itcl 0] #auto {*}[lrange $itcl 1 end] mount $mount}
+		set itcl [[lindex $itcl 0] #auto {*}[lrange $itcl 1 end] mount $mount]
 	    } else {
 		# construct anonymous object
-		Debug.direct {[lindex $itcl 0] create {*}[lrange $itcl 1 end] mount $mount}
-		set itcl [[lindex $itcl 0] create {*}[lrange $itcl 1 end] mount $mount]
+		Debug.direct {$itcl mount $mount}
+		set itcl [{*}$itcl mount $mount]
 	    }
 
 	    # construct a dict from method name to the formal parameters of the method
