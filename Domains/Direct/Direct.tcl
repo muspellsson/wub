@@ -491,9 +491,7 @@ class create ::Direct {
 		error "Direct domain: can only specify one of object,itcl or namespace"
 	    }
 
-	    if {[llength $itcl] == 1
-		&& [info object class $itcl] ne "::oo::class"
-	    } {
+	    if {[llength $itcl] == 1} {
 		# object name must be fully ns-qualified
 		if {![string match "::*" $itcl]} {
 		    set object ::$itcl
