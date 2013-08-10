@@ -216,6 +216,7 @@ namespace eval ::Site {
 	    config ./site.config	;# configuration file
 	    application ""		;# package to require as application
 	    path ""			;# path - add to auto_path
+	    require ""			;# require - list of extra packages to require
 	    local local.tcl		;# post-init localism
 	    local_config 1		;# use ${home}/local.config too
 	    password ""			;# account (and general) root password
@@ -390,10 +391,16 @@ namespace eval ::Site {
 	}
 
 	# append $path to ::auto_path - allow site.config to augment $auto_path
-	if {[info exists path]} {
+	if {[info exists path] && $path ne ""} {
 	    lappend ::auto_path {*}$path
 	}
-
+	if {[info exists require] && $require ne ""} {
+	    foreach r $require {
+		if {[catch {package require {*}$r} e eo]} {
+		    Debug.error {error while requiring $r: $e}
+		}
+	    }
+	}
 	# configuration variable contains defaults
 	# set some default configuration flags and values
 	set phase "Site init configuration"	;# move to site configuration phase

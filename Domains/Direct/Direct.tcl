@@ -486,6 +486,7 @@ class create ::Direct {
 	    }
 	} elseif {[info exists itcl]} {
 	    # Direct iTcl domain
+	    package require itcl
 	    if {[info exists namespace] || [info exists object]} {
 		error "Direct domain: can only specify one of object,itcl or namespace"
 	    }
@@ -499,7 +500,7 @@ class create ::Direct {
 		}
 	    } elseif {[llength $itcl]%2} {
 		# construct named object
-		Debug.direct {[lindex $itcl 0] new {*}[lrange $itcl 1 end] mount $mount}
+		Debug.direct {[lindex $itcl 0] create #auto {*}[lrange $itcl 1 end] mount $mount}
 		set itcl [[lindex $itcl 0] create #auto {*}[lrange $itcl 1 end] mount $mount]
 	    } else {
 		# construct anonymous object
