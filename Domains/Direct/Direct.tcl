@@ -360,15 +360,75 @@ class create ::Direct {
 	set wildcard /[string trim $wildcard /]
 
 	# one or the other of namespace or object must exist
-	if {![info exists namespace] && ![info exists object]} {
-	    # no namespace or object - must be a mixin
+	if {![info exists namespace]
+	    && ![info exists itcl]
+	    && ![info exists object]
+	} {
+	    # no namespace, object or itcl - must be a mixin, so $object is [self]
 	    variable object [self]
 	    Debug.direct {mixin Direct [self] class: '[info object class [self]]', mixins: '[info class mixins [info object class $object]]' methods: '[info class methods [info object class $object] -private -all]'}
 	}
 
 	if {[info exists object]} {
-	    if {[info exists namespace]} {
-		error "Direct domain: can only specify one of object or namespace"
+	    if {[info exists namespace] || [info exists itcl]} {
+		error "Direct domain: can only specify one of object,itcl or namespace"
+	    }
+
+	    if {[llength $object] == 1
+		&& [info object class $object] ne "::oo::class"
+	    } {
+		# object name must be fully ns-qualified
+		if {![string match "::*" $object]} {
+		    set object ::$object
+		}
+	    } elseif {[llength $object]%2} {
+		Debug.direct {[lindex $object 0] new {*}[lrange $object 1 end] mount $mount}
+		set object [[lindex $object 0] new {*}[lrange $object 1 end] mount $mount]
+	    } else {
+		Debug.direct {[lindex $object 0] create {*}[lrange $object 1 end] mount $mount}
+		set object [[lindex $object 0] create {*}[lrange $object 1 end] mount $mount]
+	    }
+
+	    # construct a dict from method name to the formal parameters of the method
+	    set class [info object class $object]
+	    variable methods {}
+	    set superclass [info class superclasses $class]
+	    set mixins [info class mixins $class]
+	    foreach m [lreverse [lsort -dictionary [info class methods $class -private -all]]] {
+		if {[string match /* $m]} {
+		    foreach class [list [info object class $object] {*}$superclass {*}$mixins] {
+			if {![set unfound [catch {
+			    lindex [info class definition $class $m] 0
+			} def eo]]} {
+			    # defined in $class, else try next mixin
+			    break
+			}
+		    }
+		    if {$unfound} {
+			error "Can't find method $m in any class of [info object class [self]] $mixins"
+		    }
+		    Debug.direct {[lindex $object 0] method $m definition: $def}
+		    if {[lindex $def end] eq "args"} {
+			set needargs 1
+			set params [lrange $def 1 end-1]	;# remove 'r' and args from params
+		    } else {
+			set needargs 0
+			set params [lrange $def 1 end]	;# remove 'r' from params
+		    }
+
+		    Debug.direct {[lindex $object 0] method $m record definition: [list $needargs $params]}
+		    dict set methods $m [list $needargs $params]
+		}
+	    }
+
+	    Debug.direct {[lindex $object 0] of class $class methods: ($methods) / ([info class methods $class -private -all])}
+	    objdefine $object export {*}[info object methods $object -all] {*}[dict keys $methods]
+	    if {![dict exists $methods $wildcard]} {
+		error "Wildcard method $wildcard must exist in object. ([dict keys $methods])"
+	    }
+	} elseif {[info exists itcl]} {
+	    if {[info exists namespace] || [info exists object]} {
+		error "Direct domain: can only specify one of object,itcl or namespace"
 	    }
 
 	    if {[llength $object] == 1
@@ -429,7 +489,7 @@ class create ::Direct {
 		set namespace ::$namespace
 	    }
 	} else {
-            error "neither namespace nor object were defined."
+            error "neither namespace, object nor itcl were defined."
         }
 	catch {next {*}$args}
     }

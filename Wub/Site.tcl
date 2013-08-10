@@ -215,6 +215,7 @@ namespace eval ::Site {
 	    host [info hostname]	;# default home for relative paths
 	    config ./site.config	;# configuration file
 	    application ""		;# package to require as application
+	    path ""			;# path - add to auto_path
 	    local local.tcl		;# post-init localism
 	    local_config 1		;# use ${home}/local.config too
 	    password ""			;# account (and general) root password
@@ -386,6 +387,11 @@ namespace eval ::Site {
 	# use Wub config to populate ::Site variables
 	dict for {n v} [dict get $C Wub] {
 	    variable $n $v
+	}
+
+	# append $path to ::auto_path - allow site.config to augment $auto_path
+	if {[info exists path]} {
+	    lappend ::auto_path {*}$path
 	}
 
 	# configuration variable contains defaults
