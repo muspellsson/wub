@@ -214,7 +214,6 @@ namespace eval ::Site {
 	    home [file normalize [file dirname [info script]]] ;# home of application script
 	    host [info hostname]	;# default home for relative paths
 	    config ./site.config	;# configuration file
-	    globaldocroot 1		;# do we use Wub's docroot, or caller's
 	    application ""		;# package to require as application
 	    local local.tcl		;# post-init localism
 	    local_config 1		;# use ${home}/local.config too
