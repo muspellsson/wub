@@ -369,7 +369,7 @@ class create ::Direct {
 	    # caller will handle errors
 	    if {[info exists object]} {
 		my do_obj $r
-	    if {[info exists itcl]} {
+	    }elseif {[info exists itcl]} {
 		my do_itcl $r
 	    } else {
 		my do_ns $r
@@ -379,7 +379,7 @@ class create ::Direct {
 	    if {[set code [catch {
 		if {[info exists object]} {
 		    my do_obj $r
-		if {[info exists itcl]} {
+		} elseif {[info exists itcl]} {
 		    my do_itcl $r
 		} else {
 		    my do_ns $r
@@ -408,9 +408,9 @@ class create ::Direct {
 	variable catch 1	;# catch all processing errors - turn into 500 responses
 	variable {*}[Site var? Direct] {*}$args	;# allow .ini file to modify defaults
 
-        if {[info exists package]} {
-            package require $package
-        }
+	if {[info exists package]} {
+	    package require $package
+	}
 
 	set wildcard /[string trim $wildcard /]
 
@@ -539,8 +539,8 @@ class create ::Direct {
 		set namespace ::$namespace
 	    }
 	} else {
-            error "neither namespace, object nor itcl were defined."
-        }
+	    error "neither namespace, object nor itcl were defined."
+	}
 	catch {next {*}$args}
     }
 }
