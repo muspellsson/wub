@@ -262,15 +262,65 @@ class create ::Direct {
 
 	Debug.direct {calling method $cmd [string range $argl 0 80]... [dict keys $argll]} 2
 	return [dict merge $rsp [$object $cmd $rsp {*}$argl {*}$argll]]
-	if {[catch {
-	    dict merge $rsp [$object $cmd $rsp {*}$argl {*}$argll]
-	} result eo]} {
-	    Debug.direct {error: $result ($eo)}
-	    return [Http ServerError $rsp $result $eo]
-	} else {
-	    Debug.direct {Content: [dict get $result -code] '[string range [dict get? $result -content] 0 80]...'} 2
-	    return $result
+    }
+
+    # locate a matching direct method in an itcl
+    method do_itcl {rsp} {
+        variable itcl
+        variable mount
+        variable ctype
+        variable methods
+
+	Debug.direct {do direct $itcl $mount $ctype}
+
+	# search for a matching command prefix
+	foreach f {extra fprefix cprefix} v [lassign [my match [dict get $rsp -suffix]] cmd] {
+	    dict set rsp -$f $v
 	}
+
+	if {![dict exists $methods $cmd] eq {}} {
+	    Debug.direct {default not found looking for $cmd in ($methods)}
+	    return [Http NotFound $rsp]
+	}
+
+	# get the formal parameters and args-status of the method
+	lassign [dict get $methods $cmd] needargs params
+
+	set qd [dict get $rsp -Query]
+	Debug.direct {cmd: '$cmd' needargs:$needargs params:$params qd:[dict keys $qd]}
+
+	set argl {}
+	array set used {}
+	foreach arg $params {
+	    lassign $arg arg default
+	    if {[Query exists $qd $arg]} {
+		Debug.direct {param $arg exists} 2
+		incr used($arg)
+		if {[Query numvalues $qd $arg] > 1} {
+		    Debug.direct {multiple $arg: [Query values $qd $arg]} 2
+		    lappend argl [Query values $qd $arg]
+		} else {
+		    Debug.direct {single $arg: [string range [Query value $qd $arg] 0 80]...} 2
+		    lappend argl [Query value $qd $arg]
+		}
+	    } else {
+		Debug.direct {param '$arg' does not exist} 2
+		lappend argl $default
+	    }
+	}
+
+	set argll {}
+	if {$needargs} {
+	    foreach {name value} [Query flatten $qd] {
+		if {![info exists used($name)]} {
+		    Debug.direct {args $name: [string range $value 0 80]...} 2
+		    lappend argll $name $value
+		}
+	    }
+	}
+
+	Debug.direct {calling method $cmd [string range $argl 0 80]... [dict keys $argll]} 2
+	return [dict merge $rsp [$itcl $cmd $rsp {*}$argl {*}$argll]]
     }
 
     # called as "do $request" causes procs defined within
@@ -280,6 +330,7 @@ class create ::Direct {
         variable mount
         variable ctype
         variable object
+	variable itcl
         variable namespace
 
 	# get query dict
@@ -318,6 +369,8 @@ class create ::Direct {
 	    # caller will handle errors
 	    if {[info exists object]} {
 		my do_obj $r
+	    if {[info exists itcl]} {
+		my do_itcl $r
 	    } else {
 		my do_ns $r
 	    }
@@ -326,6 +379,8 @@ class create ::Direct {
 	    if {[set code [catch {
 		if {[info exists object]} {
 		    my do_obj $r
+		if {[info exists itcl]} {
+		    my do_itcl $r
 		} else {
 		    my do_ns $r
 		}
@@ -370,6 +425,7 @@ class create ::Direct {
 	}
 
 	if {[info exists object]} {
+	    # Direct TclOO domain
 	    if {[info exists namespace] || [info exists itcl]} {
 		error "Direct domain: can only specify one of object,itcl or namespace"
 	    }
@@ -382,9 +438,11 @@ class create ::Direct {
 		    set object ::$object
 		}
 	    } elseif {[llength $object]%2} {
+		# construct named object
 		Debug.direct {[lindex $object 0] new {*}[lrange $object 1 end] mount $mount}
 		set object [[lindex $object 0] new {*}[lrange $object 1 end] mount $mount]
 	    } else {
+		# construct anonymous object
 		Debug.direct {[lindex $object 0] create {*}[lrange $object 1 end] mount $mount}
 		set object [[lindex $object 0] create {*}[lrange $object 1 end] mount $mount]
 	    }
@@ -427,44 +485,34 @@ class create ::Direct {
 		error "Wildcard method $wildcard must exist in object. ([dict keys $methods])"
 	    }
 	} elseif {[info exists itcl]} {
+	    # Direct iTcl domain
 	    if {[info exists namespace] || [info exists object]} {
 		error "Direct domain: can only specify one of object,itcl or namespace"
 	    }
 
-	    if {[llength $object] == 1
-		&& [info object class $object] ne "::oo::class"
+	    if {[llength $itcl] == 1
+		&& [info object class $itcl] ne "::oo::class"
 	    } {
 		# object name must be fully ns-qualified
-		if {![string match "::*" $object]} {
-		    set object ::$object
+		if {![string match "::*" $itcl]} {
+		    set object ::$itcl
 		}
-	    } elseif {[llength $object]%2} {
-		Debug.direct {[lindex $object 0] new {*}[lrange $object 1 end] mount $mount}
-		set object [[lindex $object 0] new {*}[lrange $object 1 end] mount $mount]
+	    } elseif {[llength $itcl]%2} {
+		# construct named object
+		Debug.direct {[lindex $itcl 0] new {*}[lrange $itcl 1 end] mount $mount}
+		set itcl [[lindex $itcl 0] create #auto {*}[lrange $itcl 1 end] mount $mount]
 	    } else {
-		Debug.direct {[lindex $object 0] create {*}[lrange $object 1 end] mount $mount}
-		set object [[lindex $object 0] create {*}[lrange $object 1 end] mount $mount]
+		# construct anonymous object
+		Debug.direct {[lindex $itcl 0] create {*}[lrange $itcl 1 end] mount $mount}
+		set itcl [[lindex $itcl 0] create {*}[lrange $itcl 1 end] mount $mount]
 	    }
 
 	    # construct a dict from method name to the formal parameters of the method
-	    set class [info object class $object]
-	    variable methods {}
-	    set superclass [info class superclasses $class]
-	    set mixins [info class mixins $class]
-	    foreach m [lreverse [lsort -dictionary [info class methods $class -private -all]]] {
+	    foreach fn [$itcl info function] {
+		set m [namespace tail $fn]
 		if {[string match /* $m]} {
-		    foreach class [list [info object class $object] {*}$superclass {*}$mixins] {
-			if {![set unfound [catch {
-			    lindex [info class definition $class $m] 0
-			} def eo]]} {
-			    # defined in $class, else try next mixin
-			    break
-			}
-		    }
-		    if {$unfound} {
-			error "Can't find method $m in any class of [info object class [self]] $mixins"
-		    }
-		    Debug.direct {[lindex $object 0] method $m definition: $def}
+		    lassign [$itcl info function $fn] protection type name def body
+		    Debug.direct {[lindex $itcl 0] method $m definition: $def}
 		    if {[lindex $def end] eq "args"} {
 			set needargs 1
 			set params [lrange $def 1 end-1]	;# remove 'r' and args from params
@@ -473,17 +521,18 @@ class create ::Direct {
 			set params [lrange $def 1 end]	;# remove 'r' from params
 		    }
 
-		    Debug.direct {[lindex $object 0] method $m record definition: [list $needargs $params]}
+		    Debug.direct {[lindex $itcl 0] method $m record definition: [list $needargs $params]}
 		    dict set methods $m [list $needargs $params]
+		    lappend methods [namespace tail $fn] 
 		}
 	    }
 
-	    Debug.direct {[lindex $object 0] of class $class methods: ($methods) / ([info class methods $class -private -all])}
-	    objdefine $object export {*}[info object methods $object -all] {*}[dict keys $methods]
+	    Debug.direct {[lindex $itcl 0] methods: ($methods)}
 	    if {![dict exists $methods $wildcard]} {
-		error "Wildcard method $wildcard must exist in object. ([dict keys $methods])"
+		error "Wildcard method $wildcard must exist in a Direct object. ([dict keys $methods])"
 	    }
 	} elseif {[info exists namespace]} {
+	    # Direct namespace domain
 	    # namespace must be fully qualified
 	    if {![string match "::*" $namespace]} {
 		set namespace ::$namespace
