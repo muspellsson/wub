@@ -397,7 +397,7 @@ namespace eval ::Site {
 	if {[info exists require] && $require ne ""} {
 	    foreach r $require {
 		if {[catch {package require {*}$r} e eo]} {
-		    Debug.error {error while requiring $r: $e}
+		    Debug.error {error while requiring $r: $e ($eo)}
 		}
 	    }
 	}

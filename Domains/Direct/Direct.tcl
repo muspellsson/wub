@@ -486,12 +486,15 @@ class create ::Direct {
 	    }
 	} elseif {[info exists itcl]} {
 	    # Direct iTcl domain
-	    package require itcl
+	    package require Itcl
 	    if {[info exists namespace] || [info exists object]} {
 		error "Direct domain: can only specify one of object,itcl or namespace"
 	    }
 
-	    if {[llength $itcl] == 1} {
+	    Debug.direct {$itcl a class? [::itcl::find classes]}
+	    if {[llength $itcl] == 1
+		&& "::[string trimleft $itcl :]" ni [::itcl::find classes]
+	    } {
 		# object name must be fully ns-qualified
 		if {![string match "::*" $itcl]} {
 		    set object ::$itcl
@@ -507,6 +510,8 @@ class create ::Direct {
 	    }
 
 	    # construct a dict from method name to the formal parameters of the method
+	    variable methods {}
+	    Debug.direct {[lindex $itcl 0] methods: [$itcl info function]}
 	    foreach fn [$itcl info function] {
 		set m [namespace tail $fn]
 		if {[string match /* $m]} {
@@ -522,7 +527,6 @@ class create ::Direct {
 
 		    Debug.direct {[lindex $itcl 0] method $m record definition: [list $needargs $params]}
 		    dict set methods $m [list $needargs $params]
-		    lappend methods [namespace tail $fn] 
 		}
 	    }
 
