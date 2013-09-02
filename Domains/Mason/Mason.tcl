@@ -60,6 +60,7 @@ set ::API(Domains/Mason) {
     dateformat {a tcl clock format for displaying dates in directory listings}
     stream {files above this size will be streamed using fcopy, not loaded and sent.  Note: streaming a file prevents *any* post-processing on is, so [Convert] for example will be ineffective.}
     sortparam {parameters for tablesorter}
+    context {namespace within which templates are evaluated (default ::)}
 }
 
 class create ::Mason {
@@ -124,9 +125,12 @@ class create ::Mason {
 	}
 
 	# perform template substitution
+	variable context
 	set code [catch {
 	    #puts stderr "Mason template: $template"
-	    subst $template
+	    namespace eval $context {
+		subst $template
+	    }
 	} result eo]	;# result is the substituted template
 	Debug.mason {template result: $code ($eo) - '$result' over '$template'} 2
 
@@ -492,17 +496,20 @@ class create ::Mason {
 
     constructor {args} {
 	Debug.mason {constructor: $args}
-	set mount ""	;# url for top of this domain
-	set root ""		;# file system domain root
+	set mount ""			;# url for top of this domain
+	set root ""			;# file system domain root
 	set ctype x-text/html-fragment	;# default content type
 	set hide {^([.].*)|(.*~)$}	;# these files are never matched
-	set functional ".tml"	;# functional extension
+	set functional ".tml"		;# functional extension
+	set context ::			;# context within which templates are evaluated
 	set notfound ".notfound"	;# notfound handler name
-	set wrapper ".after"	;# wrapper handler name
-	set auth ".before"	;# authentication functional
+	set wrapper ".after"		;# wrapper handler name
+	set auth ".before"		;# authentication functional
 	set indexfile index.html	;# directory index name
+
 	set dirhead {name size mtime *}
 	set dirfoot {}
+
 	# additional aliases to be installed in session interpreter
 	set aliases {}
 	set nodir 0
