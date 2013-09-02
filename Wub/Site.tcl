@@ -713,7 +713,11 @@ namespace eval ::Site {
 	::variable home
 	if {[info exists local] && $local ne ""} {
 	    if {[file exists $local]} {
-		if {[catch {source $local} r eo]} {
+		if {[catch {
+		    namespace eval ::Local {
+			source $local
+		    }
+		} r eo]} {
 		    Debug.error {Site LOCAL ($local) error: '$r' ($eo)}
 		} else {
 		    Debug.site {Loaded local script '$local'}
