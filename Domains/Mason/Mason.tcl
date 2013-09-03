@@ -64,7 +64,7 @@ set ::API(Domains/Mason) {
 }
 
 class create ::Mason {
-    variable mount root hide functional notfound wrapper auth indexfile dirhead dirfoot aliases cache ctype nodir dirparams dateformat stream sortparam
+    variable mount root hide functional notfound wrapper auth indexfile dirhead dirfoot aliases cache ctype nodir dirparams dateformat stream sortparam context
 
     method conditional {req path} {
 	# check conditional
