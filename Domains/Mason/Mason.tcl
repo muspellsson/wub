@@ -128,7 +128,7 @@ class create ::Mason {
 	variable context
 	set code [catch {
 	    #puts stderr "Mason template: $template"
-	    namespace eval $context [list subst $template]
+	    namespace eval $context "upvar response response; subst $template"
 	} result eo]	;# result is the substituted template
 	Debug.mason {template result: $code ($eo) - '$result' over '$template'} 2
 
