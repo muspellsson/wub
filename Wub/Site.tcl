@@ -715,7 +715,7 @@ namespace eval ::Site {
 	    if {[file exists $local]} {
 		if {[catch {
 		    namespace eval ::Local {
-			source $local
+			source $::Site::local
 		    }
 		} r eo]} {
 		    Debug.error {Site LOCAL ($local) error: '$r' ($eo)}
