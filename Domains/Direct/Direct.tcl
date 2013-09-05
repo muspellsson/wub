@@ -205,6 +205,53 @@ class create ::Direct {
 	}
     }
 
+    method marshall {rsp cmd} {
+	variable strict
+
+	set params [lrange [info args $cmd] 1 end]
+	array set used {}
+	set needargs 0
+	set argl {}
+	set qd [dict get $rsp -Query]
+
+	Debug.direct {cmd: '$cmd' params:$params qd:[dict keys $qd]}
+	foreach arg $params {
+	    if {[Query exists $qd $arg]} {
+		Debug.direct {param $arg exists} 2
+		incr used($arg)
+		if {[Query numvalues $qd $arg] > 1} {
+		    Debug.direct {multiple $arg: [Query values $qd $arg]} 2
+		    lappend argl [Query values $qd $arg]
+		} else {
+		    Debug.direct {single $arg: [string range [Query value $qd $arg] 0 80]...} 2
+		    lappend argl [Query value $qd $arg]
+		}
+	    } elseif {$arg eq "args"} {
+		set needargs 1
+	    } else {
+		Debug.direct {param '$arg' does not exist} 2
+		if {[info default $cmd $arg value]} {
+		    Debug.direct {default $arg: $value} 2
+		    lappend argl $value
+		} else {
+		    lappend argl {}
+		}
+	    }
+	}
+
+	set argll {}
+	if {$needargs} {
+	    foreach {name value} [Query flatten $qd] {
+		if {![info exists used($name)]} {
+		    Debug.direct {args $name: [string range $value 0 80]...} 2
+		    lappend argll $name $value
+		}
+	    }
+	}
+
+	return [list $argl $argll]
+    }
+
     # locate a matching direct method in an object
     method do_obj {rsp} {
         variable object

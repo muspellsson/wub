@@ -131,8 +131,9 @@ class create ::Mason {
 	    ::apply [list {template response} {set result [subst $template]; return [list $result $response]} $context] $template $response
 	} result eo]	;# result is the substituted template
 	Debug.mason {template result: $code ($eo) - '$result' over '$template'} 2
-	lassign $result result response
-
+	if {!$code} {
+	    lassign $result result response
+	}
 	if {$code && $code < 200} {
 	    dict set response -dynamic 1
 	    return [Http ServerError $response $result $eo]
