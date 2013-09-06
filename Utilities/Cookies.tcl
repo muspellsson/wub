@@ -689,6 +689,17 @@ namespace eval ::Cookies {
     }
 
     # fetch a single matching cookie's value from the cookie dict.
+    proc exists {cookies args} {
+	Debug.cookies {Cookie exists $cookies $args}
+	if {[llength $args] eq 1} {
+	    set args [lindex $args 0]
+	}
+
+	set matches [match $cookies $args]
+	return [expr {[llength $matches] != 0}]
+    }
+
+    # fetch a single matching cookie's value from the cookie dict.
     proc fetch {cookies args} {
 	Debug.cookies {Cookie fetch $cookies $args}
 	if {[llength $args] eq 1} {
