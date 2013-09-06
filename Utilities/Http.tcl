@@ -692,7 +692,8 @@ namespace eval ::Http {
 	dict set rsp -code 500
 	dict set rsp -rtype Error
 	dict set rsp -dynamic 1
-	dict set rsp -error [list $message $eo]	;# record the original error
+	dict set rsp -error $message	;# record the original error
+	dict set rsp -error_dict $eo
 	if {[llength [info commands ::errLog]]} {
 	    ::errLog add $rsp $message $eo
 	}
