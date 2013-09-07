@@ -377,6 +377,7 @@ if {[info exists argv0] && ($argv0 eq [info script])} {
 	    var1 val1
 	    v1 2
 	    v2 [expr {$v1 ** 2}]
+	    topdir "hello world"
 	}
 	# another section
 	sect1 {
@@ -404,7 +405,7 @@ if {[info exists argv0] && ($argv0 eq [info script])} {
 	}
 
 	test Config-test {} -setup $SETUP -body {
-	    config assign Wub topdir "hello world"
+	    config assign Wub topdir "\"hello world\""
 	    config extract
 	    config get Wub topdir
 	} -cleanup $CLEANUP -result {hello world}

@@ -393,7 +393,9 @@ namespace eval ::Site {
 	# append $path to ::auto_path - allow site.config to augment $auto_path
 	if {[info exists path] && $path ne ""} {
 	    lappend ::auto_path {*}$path
-	    ::tcl::tm::path add {*}$path
+	    if {[catch {::tcl::tm::path add {*}$path} e eo]} {
+		Debug.error {error while adding $path to ::tm::path: $e ($eo)}
+	    }
 	}
 	if {[info exists require] && $require ne ""} {
 	    foreach r $require {
