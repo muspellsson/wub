@@ -451,15 +451,15 @@ namespace eval ::Site {
                 }
             }
 
-	    if {[dict exists $section -loaddir]} {
-		set dir [dict get $section -loaddir]
+	    # process domain's metadata (if any)
+	    set metadata [config metadata $sect]
+	    if {[dict exists $metadata -loaddir]} {
+		set dir [dict get $metadata -loaddir]
 		::source [file join $dir pkgIndex.tcl]
-		dict unset section -loaddir
 	    }
-	    if {[dict exists $section -loadfile]} {
-		set file [dict get $section -loadfile]
+	    if {[dict exists $metadata -loadfile]} {
+		set file [dict get $metadata -loadfile]
 		::source $file
-		dict unset section -loadfile
 	    }
 
             lassign [split $domain] domain instname

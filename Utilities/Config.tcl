@@ -30,26 +30,26 @@ oo::class create Config {
 	set varname ""	;# initial name used to collect per-section comments
 	set body [parsetcl simple_parse_script $script]
 	parsetcl walk_tree body index Rs {} C.* {
-	    set cmd [lindex $body {*}$index]
 	    if {[llength $index] == 1} {
-		set meta [lassign $cmd . . . left]
-		set right [lindex $meta end]
-		set meta [lrange $meta 0 end-1]
-
+		# only process at script level
+		set cmd [lindex $body {*}$index]
+	
+		set left [lindex $cmd 3]
 		set varname [parsetcl unparse $left]	;# literal name
 		if {![string match L* [lindex $left 0]]} {
 		    error "variable name '$varname' must be a literal ($left)"
 		}
-
-		# accumulate per-variable metadata
-		foreach md $meta {
-		    dict set metadata $section $varname [parsetcl unparse $md]
+		
+		set rest [lrange $cmd 4 end]
+		if {[llength $rest] == 1} {
+		    set rl [parsetcl unparse {*}$rest]
+		} else {
+		    set rl \"[parsetcl unparse [list {*}[lrange $cmd 0 2] {*}$rest]]\"
 		}
 
 		# set raw value
-		set rl [parsetcl unparse $right]
 		dict set raw $section $varname $rl
-		Debug.config {BCMD $index: ($left) ($right) '$rl' - MD:($metadata)}
+		Debug.config {BCMD $index: ($left) ($rest) '$rl' - MD:($metadata)}
 	    } else {
 		# we only transform the script top level
 	    }
@@ -77,7 +77,7 @@ oo::class create Config {
 	lassign $args _raw _comments _metadata
 	dict set raw $section [dict merge [dict get? $raw $section] $_raw]
 	dict set comments $section [dict merge [dict get? $comments $section] $_comments]
-	dict set metadata $section [dict merge [dict get? $metadata $section] $_metadata]
+	dict append metadata $section " " $_metadata
     }
 
     # parse a complete configuration into raw, comments and metadata
@@ -86,21 +86,28 @@ oo::class create Config {
 
 	set parse [parsetcl simple_parse_script $script]
 	parsetcl walk_tree parse index Cd {
-	    set cmd [lindex $parse {*}$index]
 	    if {[llength $index] == 1} {
-		set meta [lassign $cmd . . . left]
-		set right [lindex $meta end]
-		set meta [lrange $meta 0 end-1]
+		set cmd [lindex $parse {*}$index]
 
+		set left [lindex $cmd 3]
 		set section [parsetcl unparse $left]
 		if {![string match L* [lindex $left 0]]} {
 		    error "section name '$section' must be a literal ($left)"
 		}
 
-		# accumulate per-section metadata
-		foreach md $meta {
-		    dict set metadata $section "" [parsetcl unparse $md]
+		set rest [lrange $cmd 4 end]
+		set right [lindex $rest end]
+		if {[llength $rest] == 1} {
+		    # no meta
+		    set meta {}
+		} else {
+		    # some meta
+		    set meta [parsetcl unparse [list {*}[lrange $cmd 0 2] {*}[lrange $rest 0 end-1]]]
 		}
+
+		# accumulate per-section metadata
+		dict set metadata $section $meta
+		#puts stderr "MD $section '$meta'"
 
 		# parse raw body of section
 		my parse_section $section [lindex [parsetcl unparse $right] 0]
@@ -136,8 +143,9 @@ oo::class create Config {
     }
 
     # assign - assign config dict from args
-    method assign {args} {
-	variable raw; dict set raw {*}$args
+    method assign {section var args} {
+	variable raw
+	dict set raw $section $var \"[join $args]\"
 	variable clean 0
     }
 
@@ -189,6 +197,14 @@ oo::class create Config {
 	    #set _C::${section}::$n [namespace eval _C::$section return $sv]
 	    namespace eval _C::$section variable $n $sv
 	}
+
+	Debug.config {evaling section metadata '$section'}
+	variable metadata
+	namespace eval _C::$section [list variable ""; set "" {}]
+	if {[dict exists $metadata $section]} {
+	    set sv [my VarSub [dict get $metadata $section]]
+	    namespace eval _C::$section set \"\" \"$sv\"
+	}
     }
 
     # evaluate a raw dict after variable substitution
@@ -233,6 +249,22 @@ oo::class create Config {
     method exists {args} {
 	variable raw
 	return [dict exists $raw {*}$args]
+    }
+
+    # metadata - access metadata values
+    method metadata {{section ""}} {
+	if {$section eq ""} {
+	    variable metadata
+	    puts stderr "metadata: $metadata"
+	    return $metadata
+	}
+	# evaluate any changes in raw
+	variable extracted
+	if {[dict exists $extracted $section ""]} {
+	    return [dict get $extracted $section ""]
+	} else {
+	    return {}
+	}
     }
 
     # extract naming context from configuration and aggregated namespace
@@ -289,16 +321,6 @@ oo::class create Config {
 	    return $comments
 	} else {
 	    return [dict get $comments $section]
-	}
-    }
-
-    # metadata - access metadata values
-    method metadata {{section ""}} {
-	variable metadata
-	if {$section eq ""} {
-	    return $metadata
-	} else {
-	    return [dict get? $metadata $section]
 	}
     }
 
@@ -368,28 +390,6 @@ oo::class create Config {
 }
 
 if {[info exists argv0] && ($argv0 eq [info script])} {
-    Debug on config 10
-
-    Config create config
-    puts stderr "DICT: [config extract {
-	section {
-	    var val	;# this is a variable
-	    var1 val1
-	    v1 2
-	    v2 [expr {$v1 ** 2}]
-	    topdir "hello world"
-	}
-	# another section
-	sect1 {
-	    v1 [expr {$section::v1 ^ 10}]
-	    ap -moop moopy [list moop {*}$::auto_path]
-	}
-	sect_err -sectmetadata yep {
-	    xy -varmetadata yep {this is an error $moop(m}
-	}
-    }]"
-    config destroy
-
     package require tcltest
 
     namespace eval ::Config::test {
@@ -403,12 +403,59 @@ if {[info exists argv0] && ($argv0 eq [info script])} {
 	variable CLEANUP {
 	    config destroy
 	}
+	set sample_config {
+	    section {
+		var val	;# this is a variable
+		var1 val1
+		v1 2
+		v2 [expr {$v1 ** 2}]
+		string "hello world"
+		list [list hello world]
+		naked hello world
+	    }
+	    # another section
+	    sect1 -auto $::auto_path {
+		v1 [expr {$section::v1 ^ 10}]
+		ap [list moop {*}$::auto_path]
+		ap1 {junk}
+	    }
+	}
+	
+	test Config-test1 {} -setup $SETUP -body {
+	    config extract $sample_config
+	    config get section v2
+	} -cleanup $CLEANUP -result 4
 
-	test Config-test {} -setup $SETUP -body {
-	    config assign Wub topdir "\"hello world\""
+	test Config-test2 {} -setup $SETUP -body {
+	    config extract $sample_config
+	    config get sect1 ap
+	} -cleanup $CLEANUP -result [list moop {*}$::auto_path]
+
+	test Config-test3 {} -setup $SETUP -body {
+	    config extract $sample_config
+	    config get section string
+	} -cleanup $CLEANUP -result "hello world"
+
+	test Config-test4 {} -setup $SETUP -body {
+	    config extract $sample_config
+	    config get section list
+	} -cleanup $CLEANUP -result "hello world"
+
+	test Config-test4 {} -setup $SETUP -body {
+	    config extract $sample_config
+	    config get section naked
+	} -cleanup $CLEANUP -result "hello world"
+
+	test Config-test-api1 {} -setup $SETUP -body {
+	    config assign Wub topdir "hello world"
 	    config extract
 	    config get Wub topdir
 	} -cleanup $CLEANUP -result {hello world}
+
+	test Config-metadata1 {} -setup $SETUP -body {
+	    config extract $sample_config
+	    config metadata sect1
+	} -cleanup $CLEANUP -result "-auto $::auto_path"
 
 	cleanupTests
     }
