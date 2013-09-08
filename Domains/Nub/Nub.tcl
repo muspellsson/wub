@@ -952,8 +952,9 @@ oo::class create ::NubClass {
 		# Finally: defining a new domain with this element
 
 		# add 'mount' parameter to constructor
-		append body " mount [join [lrange $key 1 end] /]"
-
+		set mounting [join [lrange $key 1 end] /]
+		append body " mount $mounting"
+		
 		# generate dict-/ redirects
 		if {$redirect_dirs && [string match */ $section]} {
 		    # if the key is a directory, we redirect anything
@@ -1047,6 +1048,7 @@ oo::class create ::NubClass {
 	    set url [join [lassign $u host] /]
 	    Debug.nub {code_domains: $u ($d)}
 	    dict with d {
+		# variables: domain, name, section, auth
 		if {[dict exists $names $host,$url]} {
 		    error "Domain $name (referenced in $section) is a duplicate."
 		    continue;
@@ -1088,11 +1090,12 @@ oo::class create ::NubClass {
 			if {![dict exists $domains $name]} {
 			    lappend error "Domain $name (referenced in $section) doesn't exist."
 			}
-			append switch [string map [list %H $host %U $url %N $name] {
+			append switch [string map [list %H $host %U $url %N $name %S $section] {
 			    "%H,%U*" {
-				Debug.nub {Dispatch [dict get $r -url] via %H,%U* to cmd '$defs(%N)'}
-				set r [Http timestamp $r do]
-				{*}$defs(%N) do $r
+				Debug.nub {Dispatch [dict get $r -url] via %H,%U* to cmd '$defs(%N)' from section '%S'}
+				set r [Http timestamp $r do]	;# remember when we started this
+				dict set r -section "%S"	;# record definition section
+				{*}$defs(%N) do $r		;# process the request
 			    }}]
 		    }
 		}
@@ -1100,7 +1103,7 @@ oo::class create ::NubClass {
 	}
 	return $switch
     }
-		    variable uniq
+    variable uniq
 
     method generate {urls {domains {}} {defaults {}}} {
 	upvar error error
