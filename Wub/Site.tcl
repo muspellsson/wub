@@ -451,6 +451,12 @@ namespace eval ::Site {
                 }
             }
 
+	    # permit a domain named as an entity
+            lassign [split $domain] domain instname
+            if {$instname eq ""} {
+                set instname $sect
+            }
+
 	    # process domain's metadata (if any)
 	    set metadata [config metadata $sect]
 	    if {[dict exists $metadata -loaddir]} {
@@ -467,17 +473,19 @@ namespace eval ::Site {
                 set instname $sect
             }
 
-	    set a {}
-	    foreach {n v} $section {
-		lappend a $n $v
-	    }
-
-	    if {[dict exists $a -threaded]} {
-		# this is a threaded domain
-		set targs [dict get $a -threaded]
-		dict unset a -threaded
-		Debug.nubsite {Nub domain $url [list Threaded ::Domains::$instname] {*}$targs $domain $a}
-		Nub domain $url [list Threaded ::Domains::$instname] {*}$targs $domain {*}$a
+	    if {[dict exists $metadata -session]} {
+		# this is a session domain
+		if {[dict exists $metadata -threaded]} {
+		    error "$sect can't have both -threaded and a -session metadata declared"
+		}
+		set sargs [dict get $metadata -session]
+		Debug.nubsite {Nub domain $url [list $session ::Domains::$instname] {*}$targs $domain $section}
+		Nub domain $url [list Session ::Domains::$instname] {*}$sargs -domain $domain {*}$section
+	    } elseif {[dict exists $metadata -threaded]} {
+		# this is a -threaded domain
+		set targs [dict get $metadata -threaded]
+		Debug.nubsite {Nub domain $url [list Threaded ::Domains::$instname] {*}$targs $domain $section}
+		Nub domain $url [list Threaded ::Domains::$instname] {*}$targs -domain $domain {*}$section
 	    } else {
 		# this is a non-threaded domain
 		Debug.nubsite {Nub domain $url [list $domain ::Domains::$instname] $a}
