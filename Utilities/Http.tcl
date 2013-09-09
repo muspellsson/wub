@@ -910,6 +910,9 @@ namespace eval ::Http {
 
     # internal redirection generator
     proc genRedirect {title code rsp to {content ""} {ctype "text/html"} args} {
+	if {$to eq ""} {
+	    set to [dict get $rsp -url]
+	}
 	set to [Url redir $rsp $to {*}$args]
 
 	if {$content ne ""} {
@@ -946,14 +949,11 @@ namespace eval ::Http {
 
     # construct an HTTP Redirect response
     proc Redirect {rsp {to ""} {content ""} {ctype "text/html"} args} {
-	if {$to eq ""} {
-	    set to [dict get $rsp -url]
-	}
 	return [Http genRedirect Redirect 302 $rsp $to $content $ctype {*}$args]
     }
 
     # construct a simple HTTP Redirect response with extra query
-    proc Redir {rsp to args} {
+    proc Redir {rsp {to ""} args} {
 	return [Http genRedirect Redirect 302 $rsp $to "" "" {*}$args]
     }
 
@@ -967,22 +967,22 @@ namespace eval ::Http {
     }
 
     # construct an HTTP Found response
-    proc Found {rsp to {content ""} {ctype "text/html"} args} {
+    proc Found {rsp {to ""} {content ""} {ctype "text/html"} args} {
 	return [Http genRedirect Redirect 302 $rsp $to $content $ctype {*}$args]
     }
 
     # construct an HTTP Relocated response
-    proc Relocated {rsp to {content ""} {ctype "text/html"} args} {
+    proc Relocated {rsp {to ""} {content ""} {ctype "text/html"} args} {
 	return [Http genRedirect Relocated 307 $rsp $to $content $ctype {*}$args]
     }
 
     # construct an HTTP SeeOther response
-    proc SeeOther {rsp to {content ""} {ctype "text/html"} args} {
+    proc SeeOther {rsp {to ""} {content ""} {ctype "text/html"} args} {
 	return [Http genRedirect SeeOther 303 $rsp $to $content $ctype {*}$args]
     }
 
     # construct an HTTP Moved response
-    proc Moved {rsp to {content ""} {ctype "text/html"} args} {
+    proc Moved {rsp {to ""} {content ""} {ctype "text/html"} args} {
 	return [Http genRedirect Moved 301 $rsp $to $content $ctype {*}$args]
     }
 
