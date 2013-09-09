@@ -362,9 +362,9 @@ oo::class create ::NubClass {
     }
 
     method non_auth {url} {
-	set url ""
-	lassign [split $url "#"] url
-	return $url
+	set url_part ""
+	lassign [split $url "#"] url_part
+	return $url_part
     }
 
     method auth {url realm} {
@@ -655,12 +655,13 @@ oo::class create ::NubClass {
             } {
 		set url "^http:[string range $url 1 end]"	;# rewrite to contain http prefix
 	    }
-	    Debug.nub {gen_regsubs url:'$url' name:'$name'}
-	    append rewriting [string map [list %URL% $url %N% $name %AURL% [tclarmour $url]] {{%URL%} {
+	    set clause [string map [list %URL% $url %N% $name %AURL% [tclarmour $url]] {{%URL%} {
 		set url [{*}$defs(%N%) $r]
 		Debug.nub {rewrite: '%AURL%' -> '$url' ($defs(%N%))}
 		lappend rw_transforms {%URL%} $url
-	    }}] \n
+	    }}]
+	    Debug.nub {gen_regsubs url:'$url' name:'$name' -> ($clause)}
+	    append rewriting \n
 	}
 	return $rewriting
     }
@@ -683,7 +684,7 @@ oo::class create ::NubClass {
                     }
                 } e eo]} {
                     Debug.error {Nub Definition Error: '$e' in rewrite "lambda r {%AL%}".  ($eo)}
-                    set defs(%N) [::Nub failed %N $e $eo]
+                    set defs(%N) [::Nub failed "%N" $e $eo]
                 }
             }]
             append definitions [string trim $rw \n] \n
@@ -701,12 +702,13 @@ oo::class create ::NubClass {
 	    if {[string match ^* $url] && ![string match ^http* [string tolower $url]]} {
 		set url "^http:[string range $url 1 end]"	;# rewrite to contain http prefix
 	    }
-	    Debug.nub {gen_rewrites url:'$url' name:'$name'}
-	    append rewriting [string map [list %URL% $url %N% $name %AURL% [tclarmour $url]] {{%URL%} {
+	    set clause [string map [list %URL% $url %N% $name %AURL% [tclarmour $url]] {{%URL%} {
 		set url [{*}$defs(%N%) $r]
 		Debug.nub {rewrite: '%AURL%' -> '$url' ($defs(%N%))}
 		lappend rw_transforms {%URL%} $url
-	    }}] \n
+	    }}]
+	    Debug.nub {gen_rewrites url:'$url' name:'$name' ($clause)}
+	    append rewriting $clause \n
 	}
 	return $rewriting
     }
@@ -714,8 +716,8 @@ oo::class create ::NubClass {
 
     # generate code for rewriting
     # TODO: this code doesn't include port in comparison - it likely should.
-    method code_rewrites {rewriting} {
-	Debug.nub {code_rewrites: $rewriting}
+    method emit_rewrites {rewriting} {
+	Debug.nub {emit_rewrites: $rewriting}
 	if {$rewriting eq ""} {
 	    return ""
 	}
@@ -756,14 +758,16 @@ oo::class create ::NubClass {
 
 	set definitions ""
 	dict for {n d} $domains {
-	    Debug.nub {DEFINING: $n $d}
 	    set body [dict get $d body]; dict unset d body
 
 	    # handle domain package require
 	    set domain [dict get $d domain]; dict unset d domain
+
             variable defined
 	    if {![info exists defined($domain)]} {
 		# emit a single "package require" per domain.
+		Debug.nub {DEFINING domain name:$n domain:$domain body:$body ($d)}
+
 		incr defined($domain)
 		append definitions [string map [list %D% $domain] {
 		    if {[catch {package require %D%} e eo]} {
@@ -771,34 +775,41 @@ oo::class create ::NubClass {
 			dict set def_errors %D% [list $e $eo]
 		    }
 		}]
+	    } else {
+		Debug.nub {Duplicate domain name:$n domain:$domain body:$body - do nothing}
+		continue
 	    }
 
 	    # generate code to construct the domain
 	    if {[string match _anonymous* $n]} {
+
 		# anonymous domain definition
-		append definitions [string trim [string map [list %N% $n %D% $domain %A% $body %AA% [tclarmour $body]] {
+		set clause [string trim [string map [list %N% $n %D% $domain %A% $body %AA% [tclarmour $body]] {
 		    if {[catch {
 			set defs(%N%) [%D% new %A%]
 		    } e eo]} {
 			Debug.error {Nub Definition Error: '$e' in anonymous "%D% new %AA%".  ($eo)}
 			dict lappend def_errors %N% [list $e $eo]
-			set defs(%N%) [::Nub failed %N% $e $eo]
+			set defs(%N%) [::Nub failed "%N%" $e $eo]
 		    }
-		}] \n] \n
+		}] \n]
+		Debug.nub {anonymous domain definition name:$n domain:$domain -> ($clause)}
+		append definitions $clause \n
 	    } else {
 		# named domain definition
-		append definitions [string trim [string map [list %N% $n %D% $domain %A% $body %AA% [tclarmour $body]] {
+		set clause [string trim [string map [list %N% $n %D% $domain %A% $body %AA% [tclarmour $body]] {
 		    if {[catch {
-			set defs(%N%) [%D% create %N% %A%]
+			set defs(%N%) [%D% create "%N%" %A%]
 		    } e eo]} {
 			Debug.error {Nub Definition Error: '$e' in running "%D% create %N% %AA%".  ($eo)}
-			set defs(%N%) [::Nub failed %N% $e $eo]
+			set defs(%N%) [::Nub failed "%N%" $e $eo]
 		    }
-		}] \n] \n
+		}] \n]
+		append definitions $clause \n
+		Debug.nub {named domain definition name:$n domain:$domain -> ($clause)}
 	    }
 	}
 
-	Debug.nub {DEFINED: $definitions}
 	return $definitions
     }
 
@@ -851,14 +862,15 @@ oo::class create ::NubClass {
                     set PATH ""
                 }
 
-                Debug.nub {gen_redirects compound host:'$host' path:'$path'}
-                append redirecting [string map [list %H% $host %P% $path %M% $method %HOST% $HOST %PORT% $PORT %PATH% $PATH] {
+                set clause [string map [list %H% $host %P% $path %M% $method %HOST% $HOST %PORT% $PORT %PATH% $PATH] {
                     "%H%,%P%" {
                         Debug.nub {REDIR //%H%%P%}
                         %HOST%%PORT%%PATH%
                         return [Http %M% $r [Url uri $r]]
                     }
-                }] \n
+                }]
+                Debug.nub {gen_redirects compound host:'$host' path:'$path' -> ($clause)}
+		append redirecting $clause \n
             }
         }
 
@@ -888,17 +900,16 @@ oo::class create ::NubClass {
 	return $blocking
     }
 
-    # reprocess domain:
+    # accum_domain: accumulate this domain's data
     # 1) substituting referenced domain defs
     # 2) ensuring the content has a name
     # we then reconstruct the processed contents
-    method accum_domains {key dom} {
-	variable redirect_dirs
+    method accum_domain {key dom} {
 	upvar 1 processed processed
 	upvar 1 domains domains
 	upvar 1 redirects redirects
 	upvar 1 error error
-
+	Debug.nub {accum_domain '$key' ($dom)}
 	set section [dict get $dom section]	;# original URL
 
 	# get the body part - arguments to the Domain constructor
@@ -909,67 +920,51 @@ oo::class create ::NubClass {
 
 	# split domain part into domain identifier and possible name
 	set domain [dict get $dom domain]	;# processing element
-	set name ""
-	lassign $domain domain name	;# get the domain and possibly name
-
-	if {[string index $domain 0]
-	    ne [string toupper [string index $domain 0]]
-	} {
-	    # named domain reference, e.g. [/moop/] domain fred
-	    # where fred is not further defined, and not Capitalized
-	    # we consider it a reference to a named domain
-
-	    # TODO: this isn't used, or well defined.  Reconsider
-	    if {0 && [info exists domains $domain] && [llength $dargs]} {
-		# domain references can't add arguments
-		lappend error "[dict get $dom section]: Can't specify named domain $domain (defined in [dict get $domains $domain section] with constructor arguments.  Try just domain=$domain"
-	    }
-
-	    set name $domain
-	    set domain unknown
-	    dict set processed $key [list domain $domain name $name section $section auth $auth]
+	Debug.nub {defining domain:'$domain' for url '$key' ($dom)}
+	if {[llength $domain] > 1} {
+	    # specified a name for the Domain to construct
+	    lassign $domain domain name	;# get the domain its name
 	} else {
-	    # Domain definition e.g. [/moop/] domain File fred ..
-	    Debug.nub {defining domain: $name}
+	    # the Domain constructor doesn't specify a name
+	    # for the domain object, so we invent one
+	    variable uniq
+	    set name $section ;#_anonymous[incr uniq]	;# so make up a name
+	}
 
-	    # determine or construct a name for the domain
-	    if {$name eq ""} {
-		# the Domain constructor doesn't specify a name
-		# for the object/domain, so we invent one
-		variable uniq
-		set name _anonymous[incr uniq]	;# so make up a name
-	    }
+	# Domain definition e.g. [/moop/] domain File fred ..
 
-	    # see if we're defining or merely referencing domain
-	    if {[dict exists $domains $domain]} {
-		# this named domain already exists
-		if {$body ne ""} {
-		    # domain references can't add arguments
-		    lappend error "$section: can't respecify the arguments to Domain $name"
-		    continue
-		}
+	# see if we're defining or merely referencing domain
+	if {[dict exists $domains $name]} {
+	    # this named domain already exists
+	    if {[string trim $body] ne ""} {
+		# domain references can't add arguments
+		lappend error "$section: can't respecify the arguments to Domain $name"
+		continue
 	    } else {
-		# Finally: defining a new domain with this element
-
-		# add 'mount' parameter to constructor
-		set mounting [join [lrange $key 1 end] /]
-		append body " mount $mounting"
-		
-		# generate dict-/ redirects
-		if {$redirect_dirs && [string match */ $section]} {
-		    # if the key is a directory, we redirect anything
-		    # which doesn't specify the trailing /
-		    set rkey [my parseurl [string trimright $section /]]
-		    dict set redirects $rkey $section
-		}
-
-		# record this domain for possible later reference
-		dict set domains $name [list domain $domain body $body]
-
-		# we have now reprocessed the domain definition
-		dict set processed $key [list domain $domain name $name section $section auth $auth]
-		Debug.nub {accum_domain: $name domain $domain ($body)}
+		# just a reference to this named domain, which is already defined
 	    }
+	} else {
+	    # Finally: defining a new domain with this element
+
+	    # add 'mount' parameter to constructor
+	    set mounting [join [lrange $key 1 end] /]
+	    append body " mount $mounting"
+		
+	    # generate dict-/ redirects
+	    variable redirect_dirs
+	    if {$redirect_dirs && [string match */ $section]} {
+		# if the key is a directory, we redirect anything
+		# which doesn't specify the trailing /
+		set rkey [my parseurl [string trimright $section /]]
+		dict set redirects $rkey $section
+	    }
+	    
+	    # record this domain for possible later reference
+	    dict set domains $name [list domain $domain body $body]
+	    
+	    # we have now reprocessed the domain definition
+	    dict set processed $key [list domain $domain name $name section $section auth $auth]
+	    Debug.nub {accum_domain done: $name domain $domain ($body)}
 	}
 
 	# record authentication
@@ -978,8 +973,8 @@ oo::class create ::NubClass {
 	}
     }
 
-    # code_auths - generate code to perform auth for domain
-    method code_auths {auths} {
+    # emit_auths - generate code to perform auth for domain
+    method emit_auths {auths} {
 	if {![dict size $auths]} {return ""}
 
 	# generate auths - should these be sorted in reverse length order, as for domains?
@@ -999,7 +994,7 @@ oo::class create ::NubClass {
 	}]
     }
 
-    method code_trailing {processed} {
+    method emit_trailing {processed} {
         if {![dict size $processed]} {
             variable NS
             namespace eval $NS {
@@ -1011,7 +1006,7 @@ oo::class create ::NubClass {
 	set switch ""
 	foreach {u d} $processed {
 	    set url [join [lassign $u host] /]
-	    Debug.nub {code_trailing: $u ($d)}
+	    #Debug.nub {emit_trailing: $u ($d)}
 	    dict with d {
 		lappend switch "$host,$url*"
 	    }
@@ -1034,19 +1029,19 @@ oo::class create ::NubClass {
 	append body "Debug.nub {trailing: \[dict get? \$result -code] \[dict get? \$result location]}" \n
 	append body "return \$result" \n
 
-	Debug.nub {code_trailing: ($body)}
+	Debug.nub {emit_trailing: ($body)}
 	variable NS
 	namespace eval $NS [list proc trailing {r} $body]
     }
 
     # code processed domains into a big switch
-    method code_domains {processed} {
+    method emit_domains {processed} {
 	upvar 1 domains domains
 	set names {}
 	set switch ""
 	foreach {u d} $processed {
 	    set url [join [lassign $u host] /]
-	    Debug.nub {code_domains: $u ($d)}
+	    Debug.nub {emit_domains: $u ($d)}
 	    dict with d {
 		# variables: domain, name, section, auth
 		if {[dict exists $names $host,$url]} {
@@ -1090,13 +1085,16 @@ oo::class create ::NubClass {
 			if {![dict exists $domains $name]} {
 			    lappend error "Domain $name (referenced in $section) doesn't exist."
 			}
-			append switch [string map [list %H $host %U $url %N $name %S $section] {
+			set clause [string map [list %H $host %U $url %N $name %S $section] {
 			    "%H,%U*" {
 				Debug.nub {Dispatch [dict get $r -url] via %H,%U* to cmd '$defs(%N)' from section '%S'}
 				set r [Http timestamp $r do]	;# remember when we started this
 				dict set r -section "%S"	;# record definition section
 				{*}$defs(%N) do $r		;# process the request
-			    }}]
+			    }
+			}]
+			Debug.nub {domain clause name:$name -> ($clause)}
+			append switch $clause
 		    }
 		}
 	    }
@@ -1105,6 +1103,7 @@ oo::class create ::NubClass {
     }
     variable uniq
 
+    # generate - generate the code for the url dispatcher
     method generate {urls {domains {}} {defaults {}}} {
 	upvar error error
 
@@ -1114,7 +1113,7 @@ oo::class create ::NubClass {
 	set ordered [lsort -command {::Url order} [dict keys $urls]]
 
 	Debug.nub {URLs in order $ordered}
-	Debug.nub {URLs: $urls}
+	#Debug.nub {URLs: $urls}
 
 	# ordered set of nubs is sorted into one of these categories
 	foreach cat {processed rewrites regsubs
@@ -1130,7 +1129,7 @@ oo::class create ::NubClass {
 	    set domain [dict get $urls $key domain]	;# processing element
 
 	    # get domain from section and constructor args, if any
-	    Debug.nub {processing: $key - $section - $domain}
+	    Debug.nub {generate processing: key:$key section:$section domain:$domain}
 	    switch -- [string tolower [lindex $domain 0]] {
 		redirect {
 		    # sort redirects into redirect category
@@ -1176,21 +1175,19 @@ oo::class create ::NubClass {
 		default {
 		    # everything else should be domains
 		    # add to processed category
-		    my accum_domains $key [dict get $urls $key]
+		    my accum_domain $key [dict get $urls $key]
 		}
 	    }
 	}
 
-	Debug.nub {DOMAINS: $domains}
-	Debug.nub {PROCESSED: $processed}
-	#Debug.nub {REDIRECTS: $redirects}
-	Debug.nub {REWRITES: $rewrites}
-	#Debug.nub {BLOCK: $blocking}
 	#Debug.nub {URLS: $urls}
 
 	# generate code for each of the categories
 	# order is important
+	#Debug.nub {BLOCK: $blocking}
 	set blocking [my gen_blocking $blocking]
+
+	Debug.nub {DOMAINS: $domains}
 	append definitions [my gen_definitions $domains] \n	;# mods defs()
 
 	set rewriting [my gen_rewrites $rewrites]
@@ -1200,10 +1197,12 @@ oo::class create ::NubClass {
         append definitions [my gen_regsubdefs $regsubdefs] \n
 
 	set redirecting [my gen_redirects $redirects]
-	set switch [my code_domains $processed]
-	my code_trailing $processed	;# handle trailing/ problem
-	set rw [my code_rewrites [dict merge $rewriting $regsubbing]]
-	set au [my code_auths $auths]
+
+	Debug.nub {PROCESSED: $processed}
+	set switch [my emit_domains $processed]
+	my emit_trailing $processed	;# handle trailing/ problem
+	set rw [my emit_rewrites [dict merge $rewriting $regsubbing]]
+	set au [my emit_auths $auths]
 
 	# ASSEMBLE generated code
 	# the code becomes a self-modifying proc within ::Httpd
@@ -1269,7 +1268,8 @@ oo::class create ::NubClass {
 		Http NotFound $r [<p> "page '[dict get $r -uri]' Not Found."]
 	    }
 	}
-	Debug.nub {GEN: $p}
+
+	#Debug.nub {GEN: $p}
 	return $p
     }
 
@@ -1357,7 +1357,10 @@ oo::class create ::NubClass {
 
     method domain {url domain args} {
 	variable urls
-	dict set urls [my parseurl $url] [list domain $domain body $args section [my non_auth $url]]
+	set dom [list domain $domain body $args section [my non_auth $url]]
+
+	Debug.nub {declaring $url: domain:$domain ($args)}
+	dict set urls [my parseurl $url] $dom
 	my auth [my parseurl $url] [my auth_part $url]
     }
 
@@ -1434,7 +1437,7 @@ oo::class create ::NubClass {
 	    set _urls $urls
 	}
 	set do [my generate $_urls]
-	Debug.nub {apply: $do}
+	#Debug.nub {apply: $do}
 	eval $do
 	variable NS
 	namespace eval $NS {nub}
