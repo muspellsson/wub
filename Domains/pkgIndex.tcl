@@ -1,7 +1,7 @@
 # domains
 package ifneeded File 2.0 [list source [file join $dir File File.tcl]]
 package ifneeded Repo 1.0 [list source [file join $dir Repo Repo.tcl]]
-package ifneeded Session 3.1 [list source [file join $dir Session Session.tcl]]
+package ifneeded Session 4.0 [list source [file join $dir Session Session.tcl]]
 package ifneeded Mason 1.0 [list source [file join $dir Mason Mason.tcl]]
 package ifneeded Direct 1.0 [list source [file join $dir Direct Direct.tcl]]
 package ifneeded Dub 2.0 [list source [file join $dir Dub Dub.tcl]]

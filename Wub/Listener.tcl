@@ -169,7 +169,7 @@ class create ::Listener {
 
 		# we're operating a CA - get the keys from there
 		if {![string match ::* $ca]} {
-		    set ca ::Domains::$ca	;# make it relative to Domains
+		    set ca ::Dispatcher::$ca	;# make it relative to Dispatcher
 		}
 
 		Debug.listener {server key and cert supplied by '$ca' domain}
