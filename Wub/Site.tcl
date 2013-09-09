@@ -125,7 +125,7 @@ package require Dict
 package require Config	;# handle configuration
 
 Debug on site 10
-Debug on nubsite 10
+Debug off nubsite 10
 package provide Site 1.0	;# we're providing the Site facilities
 
 namespace eval ::Site {
