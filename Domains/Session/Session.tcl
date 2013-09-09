@@ -90,11 +90,13 @@ class create ::Session {
 	if {[llength $args] == 1} {
 	    set n [lindex $args 0]
 	    uplevel 1 [list upvar #1 $n $n]
-	    upvar #1 $n $n
-	    if {[info exists $n]} {
-		puts stderr "$n session var exists: [set $n]"
-	    } else {
-		puts stderr "$n session var does not exist"
+	    if {0} {
+		upvar #1 $n $n
+		if {[info exists $n]} {
+		    puts stderr "$n session var exists: [set $n]"
+		} else {
+		    puts stderr "$n session var does not exist"
+		}
 	    }
 	} else {
 	    foreach {n v} $args {
@@ -171,7 +173,7 @@ class create ::Session {
 	if {![llength $args]} {
 	    set result {}
 	    if {[info exists varmod([info coroutine])]} {
-		Debug.session {varmod summary [info coroutine] $varmod([info coroutine])}
+		Debug.session {varmod summary [info coroutine]/[namespace current] $varmod([info coroutine])}
 		set write {}; set unset {}
 		dict with varmod([info coroutine]) {}
 		unset varmod([info coroutine])
@@ -181,9 +183,9 @@ class create ::Session {
 	    return $result
 	}
 
-	Debug.session {varmod [info coroutine] $args}
-	puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
 	lassign $args name1 name2 op
+	Debug.session {varmod [string toupper $op]: [info coroutine]/[namespace current] $args}
+	#puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
 	switch -- $op {
 	    write {
 		dict set varmod([info coroutine]) write $name1 1
@@ -208,16 +210,54 @@ class create ::Session {
 	return [self]
     }
 
+    # prep - prepare a stmt or reused an already cached stmt
+    method prep {stmt} {
+	variable stmts	;# here are some statements we prepared earlier
+	variable max_prepcache
+	if {[info exists stmts($stmt)]} {
+	    set s $stmts($stmt)
+	    if {$max_prepcache > 0} {
+		# move matched element to end of cache (for LRU)
+		unset stmts($stmt)
+		set stmts($stmt) $s
+	    }
+	} else {
+	    set s [my db prepare $stmt]
+	    set stmts($stmt) $s
+	    if {$max_prepcache > 0 && [array size stmts] > $max_prepcache} {
+		Debug.store {removing LRU cached statement}
+		array set stmts [lrange [array get stmts] 2 end]
+	    }
+	}
+	return $s
+    }
+
+    method write_back {id} {
+	::variable cookie
+	# write back session variable changes
+	lassign [my varmod] changed null
+	foreach field $null {
+	    lappend vars $field=NULL
+	}
+
+	foreach field $changed {
+	    incr o
+	    lappend vars $field=:V$i
+	    dict set values V$i [uplevel \#1 [list set $field]]
+	}
+
+	# prepared db command nulls field
+	dict set values $cookie $id
+	set result [[my prep "UPDATE $cookie SET [join $vars ,] WHERE $cookie = :cookie"] allrows -- $values]
+	Debug.session {shim nulling $field -> '$result'}
+    }
+
     # shim - coroutine code which indirects to the domain handler, providing a place to store
     # session vars etc.
     # The handler is run in an apply to keep variable scope #1 pristine
     # the [my] command will invoke in this Session instance.
     method shim {args} {
 	::apply [list {} {
-	    ::variable fetcher	;# db prep'd statement to fetch session vars
-	    ::variable updater	;# db prep'd statement to update fields
-	    ::variable nuller 	;# db prep'd statement to null fields
-
 	    ::variable active	;# introspection - last session access
 	    ::variable counter	;# introspection - count of session accesses
 
@@ -237,8 +277,9 @@ class create ::Session {
 		# fetch session variables by key
 		# do it only when we've got a real request
 		::variable variables	;# introspect session var names
+		::variable cookie	;# name of cookie
 		if {![info exists variables([info coroutine])]} {
-		    set vars [lindex [$fetcher allrows -as dicts [list cookie $id]] 0]
+		    set vars [my fetch $id]
 		    ::variable fields		;# names of all known session variables
 		    Debug.session {shim $handler([info coroutine]) VARS ($fields) fetched ($vars)}
 		    foreach n $fields {
@@ -248,9 +289,7 @@ class create ::Session {
 			    Debug.session {shim var assigning $n<-'[dict get $vars $n]'}
 			    uplevel #1 [list set $n [dict get $vars $n]]
 			} else {
-			    if {[catch {uplevel #1 [list unset $n]} e eo]} {
-				Debug.session {shim var unset $n err '$e' ($eo)}
-			    }
+			    catch {uplevel #1 [list unset $n]}
 			}
 			uplevel #1 [list ::trace add variable $n {write unset} [list [my self] varmod]]
 			lappend variables([info coroutine]) $n
@@ -262,29 +301,47 @@ class create ::Session {
 		
 		# write back session variable changes
 		lassign [my varmod] changed null
-		
+		my db begintransaction
 		foreach field $null {
-		    $nuller($field) allrows [list cookie $id]	;# prepared db command nulls field
+		    # prepared db command nulls field
+		    set result [[my prep "UPDATE $cookie SET $field = NULL WHERE $cookie = :cookie"] allrows -- [list cookie $id]]
+		    Debug.session {shim nulling $field -> '$result'}
 		}
 		foreach field $changed {
-		    $updater($field) allrows [list value [uplevel #1 [list set $field]] cookie $id];# prepared db command sets field
+		    # prepared db command sets field
+		    set result [[my prep "UPDATE $cookie SET $field = :value WHERE $cookie = :cookie"] allrows -- [list value [uplevel \#1 [list set $field]] cookie $id]]
+		    Debug.session {shim setting $field to '[uplevel #1 [list set $field]]' -> '$result'}
 		}
+		my db commit
 	    }
 	} [namespace current]]
+    }
+
+    method fetch {id} {
+	::variable cookie
+	return [lindex [[my prep "SELECT * FROM $cookie WHERE $cookie = :cookie"] allrows -as dicts -- [list cookie $id]] 0]
+    }
+
+    method check {id} {
+	# check the state of this session
+	set stored [my fetch $id]
+	::variable cookie
+	set check [lindex [[my prep "SELECT count(*) FROM $cookie WHERE $cookie = :cookie"] allrows -- [list cookie $id]] 0]
+	Debug.session {CHECK $check ($stored)}
+	return [list [lindex $check 1] $stored]
     }
 
     # do - perform the action
     # we get URLs from both our Direct Domain (if it's mounted)
     method do {r} {
-	# calculate the suffix of the URL relative to $mount
+	# see if this request is for the Session instance as manager
         variable mount
-	if {[info exists mount]} {
-	    # our Direct Domain is mounted
-	    lassign [Url urlsuffix $r $mount] result r suffix path
-	    if {$result} {
-		Debug.session {passthrough to Direct for [self] $result suffix:$suffix path:$path}
-		return [next $r]	;# the URL is in our Session domain, fall through to Direct
-	    }
+	if {[info exists mount]
+	    && [string match ${mount}* [dict get $r -path]]
+	} {
+	    # our Direct Domain is mounted and this request is ours
+	    Debug.session {passthrough to Direct for [self] $result suffix:$suffix path:$path}
+	    return [next $r]	;# the URL is in our Session domain, fall through to Direct
 	}
 
 	# the URL is (presumably) in one of the handled subdomains
@@ -299,7 +356,7 @@ class create ::Session {
 
 	    # create new session id
 	    ::variable uniq; set id [::md5::md5 -hex [self][incr uniq][clock microseconds]]
-	    variable inserter; $inserter allrows [list cookie $id]	;# add new session record
+	    #variable inserter; $inserter allrows -- [list cookie $id]	;# add new session record
 
 	    # create the cookie
 	    ::variable cpath; ::variable expires; ::variable cookie_args;
@@ -308,7 +365,28 @@ class create ::Session {
 	} else {
 	    # We have the session cookie
 	    set id [dict get [Cookies Fetch $r -name $cookie] -value]
-	    Debug.session {fetched session: $id}
+	    Debug.session {fetched session cookie: $id}
+	}
+
+	# check the state of the session
+	lassign [my check $id] check stored
+	switch -- $check,[dict exists $stored $cookie] {
+	    0,0 {
+		# no record for this session
+		Debug.session {No data for $id - make some}
+		[my "prep INSERT INTO $cookie ($cookie) VALUES (:cookie)"] allrows -- [list cookie $id]
+		Debug.session {CHECK [my check $id]}
+	    }
+	    1,1 {
+		# the session is persistent *and* has data
+		Debug.session {session $id has data ($stored)}
+	    }
+
+	    1,0 -
+	    0,1 -
+	    default {
+		error "Impossible State ($check,[dict size $stored]) checking session $id"
+	    }
 	}
 
 	# find active session with $id
@@ -323,6 +401,7 @@ class create ::Session {
 	}
 
 	# call the handler shim to process the request
+	dict set r -prefix [dict get $r -section]	;# adjust the prefix for indirection
 	tailcall $coro $r
     }
     
@@ -386,21 +465,20 @@ class create ::Session {
 	# set up the DB table
 	package require tdbc
 	package require tdbc::$tdbc
-	if {$db eq ""} {
-	    if {$file eq ""} {
-		error "Must provide a db file or an open db"
-	    } else {
-		set ons [namespace current]
-		Debug.session {creating db: tdbc::${tdbc}::connection create ${ons}::dbI $file $tdbc_opts}
-		file mkdir [file dirname $file]
-		tdbc::${tdbc}::connection create ${ons}::dbI $file {*}$tdbc_opts
-		oo::objdefine [self] forward db ${ons}::dbI	;# make a db command alias
-	    }
-	} else {
+	if {$db ne ""} {
 	    Debug.session {provided db: '$db'}
-	    oo::objdefine [self] forward db {*}$db
+	} elseif {$file ne ""} {
+	    set ons [namespace current]
+	    Debug.session {creating db: tdbc::${tdbc}::connection create [namespace current]::dbI $file $tdbc_opts}
+	    file mkdir [file dirname $file]
+	    set db [tdbc::${tdbc}::connection new $file {*}$tdbc_opts]
+	    oo::objdefine [self] forward db $db	;# make a db command alias
+	} else {
+	    error "Must provide a db file or an open db"
 	}
+	oo::objdefine [self] forward db {*}$db
 
+	#Debug.session {db configure: [my db configure]}
 	if {[my db tables] eq ""} {
 	    # we don't have any tables - apply schema
 	    if {$schema eq "" && $schemafile ne ""} {
@@ -420,30 +498,19 @@ class create ::Session {
 	    error "Session requires a table named '$cookie', named for the session cookie"
 	}
 
-	::variable fetcher
-	if {![info exists fetcher]} {
-	    set fetcher [my db prepare "SELECT * FROM $cookie WHERE $cookie == :cookie"]
-	}
-	::variable inserter
-	if {![info exists inserter]} {
-	    set inserter [my db prepare "INSERT INTO $cookie ($cookie) VALUES (:cookie)"]
-	}
+	::variable max_prepcache 0	;# no limit to number of cached sql stmts
+	::variable inserter [my db prepare "BEGIN; INSERT INTO $cookie ($cookie) VALUES (:cookie); COMMIT"]
+
 	# prepare some sql statemtents to NULL and UPDATE session vars
-	::variable nuller
-	::variable updater
-	::variable fields
-	foreach {field .} [my db columns $cookie] {
-	    set nuller($field) [my db prepare "UPDATE $cookie SET $field = NULL WHERE $cookie = :cookie"]
-	    set updater($field) [my db prepare "UPDATE $cookie SET $field = :value WHERE $cookie = :cookie"]
-	    lappend fields $field
-	}
+	::variable fields [dict keys [my db columns $cookie]]
 	Debug.session {session provides vars '$fields'}
-	package provide [namespace tail [self]] 1.0
+
+	package provide [namespace tail [self]] 1.0	;# hack to let Session instances create domains
     }
 }
 
 if {0} {
-    # this goes in local.tcl
+    # this goes in local.tcl and is accessed as /session
     namespace eval ::TestSession {
 	proc / {r} {
 	    Debug.session {TestSession running in [info coroutine]}
@@ -464,14 +531,11 @@ if {0} {
 	cpath /session/
 	file test_session.db
 	schema {
-	    PRAGMA foreign_keys = on;
-	    PRAGMA synchronous=OFF;
-	    DROP TABLE IF EXISTS cookie;
+	    DROP TABLE IF EXISTS session;
 	    CREATE TABLE session (
-				  session TEXT PRIMARY KEY,
+				  session VARCHAR(32) PRIMARY KEY,
 				  counter INTEGER
 				  );
-	    CREATE INDEX session_index ON session(session);
 	}
     }
 
