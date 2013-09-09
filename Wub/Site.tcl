@@ -125,6 +125,7 @@ package require Dict
 package require Config	;# handle configuration
 
 Debug on site 10
+Debug on error 10
 Debug off nubsite 10
 package provide Site 1.0	;# we're providing the Site facilities
 
@@ -357,11 +358,27 @@ namespace eval ::Site {
 
 	# read Wub.config configuration file
 	set C [config extract]
+	if {[llength [config errors]]} {
+	    foreach err [config errors 1] {
+		Debug.error {Config $err}
+	    }
+	}
+
 	if {[dict exists $C Wub config]} {
 	    set phase "Site user configuration"	;# move to site config files phase
 	    if {[file exists [dict get $C Wub config]]} {
 		config aggregate [Config create user file [dict get $C Wub config]]
 		set C [config extract]	;# extract configuration values
+		if {[llength [user errors]]} {
+		    foreach err [user errors 1] {
+			Debug.error {UserConfig $err}
+		    }
+		}
+		if {[llength [config errors]]} {
+		    foreach err [config errors 1] {
+			Debug.error {Config $err}
+		    }
+		}
 		user destroy
 	    } else {
 		Debug.site {Site ERROR: config file [dict get $C Wub config] does not exist.}
@@ -373,6 +390,16 @@ namespace eval ::Site {
 	    set phase "Site local configuration"	;# merge in local.config
 	    config aggregate [Config create local_config file [file join [dict get $C Wub home] local.config]]
 	    set C [config extract]	;# extract configuration values
+	    if {[llength [local_config errors]]} {
+		foreach err [local_config errors 1] {
+		    Debug.error {UserConfig $err}
+		}
+	    }
+	    if {[llength [config errors]]} {
+		foreach err [config errors 1] {
+		    Debug.error {Config $err}
+		}
+	    }
 	    local_config destroy
 	}
 

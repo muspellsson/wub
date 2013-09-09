@@ -778,7 +778,6 @@ oo::class create ::NubClass {
 		}]
 	    } else {
 		Debug.nub {Duplicate domain name:$n domain:$domain body:$body - do nothing}
-		continue
 	    }
 
 	    # generate code to construct the domain

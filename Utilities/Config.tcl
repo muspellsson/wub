@@ -21,9 +21,33 @@ set ::API(Utilities/Config) {
 }
 
 oo::class create Config {
+    # line - return the line number of an character position or interval
+    # for error reporting
+    method line {interval script} {
+	lassign $interval start
+	set line 0
+	for {set i 0} {$i < $start} {incr i} {
+	    if {[string index $script $i] eq "\n"} {
+		incr line
+	    }
+	}
+	return $line
+    }
+
+    # errors - return (optionally reset) parse errors
+    method errors {{erase 0}} {
+	variable errors
+	set result $errors
+	if {$erase} {
+	    set errors {}
+	}
+	return $result
+    }
+
     # parse a single section into raw alist, comments and metadata
     method parse_section {section script} {
 	variable raw; variable comments; variable metadata
+	variable errors
 	variable clean 0
 
 	# perform script transformation
@@ -33,23 +57,28 @@ oo::class create Config {
 	    if {[llength $index] == 1} {
 		# only process at script level
 		set cmd [lindex $body {*}$index]
-	
+
 		set left [lindex $cmd 3]
 		set varname [parsetcl unparse $left]	;# literal name
 		if {![string match L* [lindex $left 0]]} {
-		    error "variable name '$varname' must be a literal ($left)"
-		}
-		
-		set rest [lrange $cmd 4 end]
-		if {[llength $rest] == 1} {
-		    set rl [parsetcl unparse {*}$rest]
+		    lappend errors "Error: Variable name '$varname' must be a literal ($left)"
 		} else {
-		    set rl \"[parsetcl unparse [list {*}[lrange $cmd 0 2] {*}$rest]]\"
-		}
+		    # see if this variable duplicates an existing variable
+		    if {[dict exists $raw $section $varname]} {
+			lappend errors "Warning: Variable $section.$varname is duplicated at line [my line [lindex $cmd 1] $script]"
+		    }
 
-		# set raw value
-		dict set raw $section $varname $rl
-		Debug.config {BCMD $index: ($left) ($rest) '$rl' - MD:($metadata)}
+		    set rest [lrange $cmd 4 end]
+		    if {[llength $rest] == 1} {
+			set rl [parsetcl unparse {*}$rest]
+		    } else {
+			set rl \"[parsetcl unparse [list {*}[lrange $cmd 0 2] {*}$rest]]\"
+		    }
+
+		    # set raw value
+		    dict set raw $section $varname $rl
+		    Debug.config {BCMD $index: ($left) ($rest) '$rl' - MD:($metadata)}
+		}
 	    } else {
 		# we only transform the script top level
 	    }
@@ -58,7 +87,7 @@ oo::class create Config {
 	    dict set comments $section $varname [lindex $body {*}$index]
 	} Ne {
 	    set cmd [lindex $parse {*}$index]
-	    error "Syntax Error - $cmd"
+	    lappend errors "Syntax Error at line [my line [lindex $cmd 1] $script] - $cmd"
 	}
 
 	Debug.config {section: raw:($raw)}
@@ -85,6 +114,7 @@ oo::class create Config {
     # parse a complete configuration into raw, comments and metadata
     method parse {script} {
 	variable raw; variable comments; variable metadata
+	variable errors
 
 	set parse [parsetcl simple_parse_script $script]
 	parsetcl walk_tree parse index Cd {
@@ -94,25 +124,31 @@ oo::class create Config {
 		set left [lindex $cmd 3]
 		set section [parsetcl unparse $left]
 		if {![string match L* [lindex $left 0]]} {
-		    error "section name '$section' must be a literal ($left)"
-		}
-
-		set rest [lrange $cmd 4 end]
-		set right [lindex $rest end]
-		if {[llength $rest] == 1} {
-		    # no meta
-		    set meta {}
+		    lappend errors "Error: Section name '$section' must be a literal ($left) at line [my line [lindex $cmd 1] $script]"
 		} else {
-		    # some meta
-		    set meta [parsetcl unparse [list {*}[lrange $cmd 0 2] {*}[lrange $rest 0 end-1]]]
+		    if {[dict exists $raw $section]} {
+			# this section duplicates an existing section
+			lappend errors "Warning: Section $section is duplicated at line [my line [lindex $cmd 1] $script]"
+		    }
+
+
+		    set rest [lrange $cmd 4 end]
+		    set right [lindex $rest end]
+		    if {[llength $rest] == 1} {
+			# no meta
+			set meta {}
+		    } else {
+			# some meta
+			set meta [parsetcl unparse [list {*}[lrange $cmd 0 2] {*}[lrange $rest 0 end-1]]]
+		    }
+		    
+		    # accumulate per-section metadata
+		    dict set metadata $section $meta
+		    #puts stderr "MD $section '$meta'"
+		    
+		    # parse raw body of section
+		    my parse_section $section [lindex [parsetcl unparse $right] 0]
 		}
-
-		# accumulate per-section metadata
-		dict set metadata $section $meta
-		#puts stderr "MD $section '$meta'"
-
-		# parse raw body of section
-		my parse_section $section [lindex [parsetcl unparse $right] 0]
 	    } else {
 		# we only transform the top level of script
 	    }
@@ -124,7 +160,7 @@ oo::class create Config {
 	    #puts stderr "Comment - $cmd"
 	} Ne {
 	    set cmd [lindex $parse {*}$index]
-	    error "Syntax Error - $cmd"
+	    lappend errors "Syntax Error at line [my line [lindex $cmd 1] $script] - $cmd"
 	}
 
 	Debug.config {parse: ($raw)}
@@ -141,7 +177,9 @@ oo::class create Config {
     # parse a file in config format
     method load {file} {
 	package require fileutil
+	variable errors {}
 	my parse [::fileutil::cat -- $file]
+	return $errors
     }
 
     # assign - assign config dict from args
@@ -273,6 +311,7 @@ oo::class create Config {
     method extract {{config ""}} {
 	if {$config ne ""} {
 	    # parse $config if proffered
+	    variable errors {}
 	    my parse $config
 	}
 
@@ -386,6 +425,7 @@ oo::class create Config {
 	    my load $file	;# parse any file passed in
 	}
 
+	variable errors {}
 	if {[info exists config]} {
 	    my parse $config	;# parse any literal config passed in
 	}
