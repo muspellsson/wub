@@ -530,7 +530,7 @@ namespace eval ::Site {
             Nub redirector [dict get $section url] {*}$section
 	} elseif {[dict exists $section rewrite]} {
 	    # Rewrite Nub section
-            Debug.nubsite {Nub rewrite [lindex $url 0] $rewrite}
+            Debug.nubsite {Nub rewrite [lindex $url 0] [dict get $section rewrite]}
             Nub rewriter [dict get $section url] {*}$section
 	} elseif {[dict exists $section regsub]} {
 	    # Regsub Nub section
