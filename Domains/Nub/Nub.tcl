@@ -829,19 +829,22 @@ oo::class create ::NubClass {
                 set method Redir
             }
 
+	    Debug.nub {gen_redirects from:'$from' body:'$body'}
+
             if {![dict exists $body host]
                 && ![dict exists $body port]
                 && ![dict exists $body path]
             } {
                 # this is a simple literal redirection
                 set to [dict get? $body redirect]
-                Debug.nub {gen_redirects simple host:'$host' path:'$path' to:'$to'}
-                append redirecting [string map [list %H% $host %P% $path %T% $to  %M% $method] {
+                set clause [string map [list %H% $host %P% $path %T% $to %M% $method] {
                     "%H%,%P%" {
                         Debug.nub {REDIR %P% -> %T%}
                         return [Http %M% $r %T%]
                     }
-                }] \n
+                }]
+                Debug.nub {gen_redirects simple host:'$host' path:'$path' to:'$to' -> '$clause'}
+		append redirecting $clause \n
             } else {
                 # this is a redirection which substitutes url parts
                 if {[dict exists $body host]} {
@@ -953,11 +956,15 @@ oo::class create ::NubClass {
 		
 	    # generate dict-/ redirects
 	    variable redirect_dirs
-	    if {$redirect_dirs && [string match */ $section]} {
+	    if {$redirect_dirs
+		&& [string match */ $section]
+		&& $section ne "/"
+	    } {
 		# if the key is a directory, we redirect anything
 		# which doesn't specify the trailing /
 		set rkey [my parseurl [string trimright $section /]]
-		dict set redirects $rkey $section
+		Debug.nub {insert formal redirect for $rkey -> '$section'}
+		dict set redirects $rkey [list redirect $section]
 	    }
 	    
 	    # record this domain for possible later reference
