@@ -125,7 +125,7 @@ package require Dict
 package require Config	;# handle configuration
 
 Debug on site 10
-Debug define nubsite 10
+Debug on nubsite 10
 package provide Site 1.0	;# we're providing the Site facilities
 
 namespace eval ::Site {
@@ -451,12 +451,6 @@ namespace eval ::Site {
                 }
             }
 
-	    # permit a domain named as an entity
-            lassign [split $domain] domain instname
-            if {$instname eq ""} {
-                set instname $sect
-            }
-
 	    # process domain's metadata (if any)
 	    set metadata [config metadata $sect]
 	    if {[dict exists $metadata -loaddir]} {
@@ -468,28 +462,37 @@ namespace eval ::Site {
 		::source $file
 	    }
 
-            lassign [split $domain] domain instname
-            if {$instname eq ""} {
-                set instname $sect
-            }
-
 	    if {[dict exists $metadata -session]} {
 		# this is a session domain
 		if {[dict exists $metadata -threaded]} {
-		    error "$sect can't have both -threaded and a -session metadata declared"
+		    error "$sect can't be -threaded and -session metadata declared"
 		}
+
 		set sargs [dict get $metadata -session]
-		Debug.nubsite {Nub domain $url [list $session ::Domains::$instname] {*}$targs $domain $section}
-		Nub domain $url [list Session ::Domains::$instname] {*}$sargs -domain $domain {*}$section
+		if {[llength $sargs]%2} {
+		    set sargs [lassign $sargs smgr]
+		} else {
+		    set smgr ::Session
+		}
+
+		Debug.nubsite {Nub domain $url $smgr $sargs $domain $section}
+		Nub domain $url $smgr {*}$sargs domain $domain {*}$section
 	    } elseif {[dict exists $metadata -threaded]} {
 		# this is a -threaded domain
 		set targs [dict get $metadata -threaded]
-		Debug.nubsite {Nub domain $url [list Threaded ::Domains::$instname] {*}$targs $domain $section}
-		Nub domain $url [list Threaded ::Domains::$instname] {*}$targs -domain $domain {*}$section
+
+		# permit a domain named as an entity
+		lassign [split $domain] domain instname
+		if {$instname eq ""} {
+		    set instname $sect
+		}
+
+		Debug.nubsite {Nub domain $url [list Threaded $instname] {*}$targs $domain $section}
+		Nub domain $url [list Threaded $instname] {*}$targs -domain $domain {*}$section
 	    } else {
 		# this is a non-threaded domain
-		Debug.nubsite {Nub domain $url [list $domain ::Domains::$instname] $a}
-		Nub domain $url [list $domain ::Domains::$instname] {*}$a
+		Debug.nubsite {Nub domain $url $domain $section}
+		Nub domain $url $domain {*}$section
 	    }
 	} elseif {[dict exists $section block]} {
 	    # Block Nub section
