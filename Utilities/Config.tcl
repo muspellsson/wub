@@ -77,7 +77,9 @@ oo::class create Config {
 	lassign $args _raw _comments _metadata
 	dict set raw $section [dict merge [dict get? $raw $section] $_raw]
 	dict set comments $section [dict merge [dict get? $comments $section] $_comments]
-	dict append metadata $section " " $_metadata
+	if {[string trim $_metadata] ne ""} {
+	    dict append metadata $section " " $_metadata
+	}
     }
 
     # parse a complete configuration into raw, comments and metadata
@@ -255,7 +257,7 @@ oo::class create Config {
     method metadata {{section ""}} {
 	if {$section eq ""} {
 	    variable metadata
-	    puts stderr "metadata: $metadata"
+	    #puts stderr "metadata: $metadata"
 	    return $metadata
 	}
 	# evaluate any changes in raw
@@ -296,7 +298,11 @@ oo::class create Config {
     method get {args} {
 	my eval
 	variable extracted
-	return [dict get $extracted {*}$args]
+	set result [dict get $extracted {*}$args]
+	if {[dict exists $result ""]} {
+	    dict unset result ""	;# remove the metadata element (if any)
+	}
+	return $result
     }
 
     # bind - bind all values to their evaluated value

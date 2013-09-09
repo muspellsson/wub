@@ -59,16 +59,16 @@ namespace eval ::Url {
 	set l2 [split [string trim $k2 /] /]
 	set diff [expr {[llength $l2] - [llength $l1]}]
 	if {$diff != 0} {
-	    Debug.nub {urlorder '$k1'=[llength $l1] '$k2'=[llength $l2] -> $diff}
+	    #Debug.nub {urlorder '$k1'=[llength $l1] '$k2'=[llength $l2] -> $diff}
 	    return $diff
 	}
 
 	# make wildcards come later in the order for the same length
 	if {[string map {* ~~} $k1] >= [string map {* ~~} $k2]} {
-	    Debug.nub {urlorder '$k1' '$k2' -> 1}
+	    #Debug.nub {urlorder '$k1' '$k2' -> 1}
 	    return 1
 	} else {
-	    Debug.nub {urlorder '$k1' '$k2' -> -1}
+	    #Debug.nub {urlorder '$k1' '$k2' -> -1}
 	    return -1
 	}
     }
