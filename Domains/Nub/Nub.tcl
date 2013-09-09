@@ -327,7 +327,8 @@ oo::class create ::NubClass {
     }
 
     method parseurl {url} {
-	if {$url eq "default"} {
+	if {$url eq "default"
+	|| $url eq ""} {
 	    set url //*/*
 	}
 	set parsed [Url parse $url]
