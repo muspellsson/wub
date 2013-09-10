@@ -171,17 +171,32 @@ class create ::Session {
 	::variable variables; return $variables($session)
     }
 
+    # flush_lazy - flush all pending mods to the db
+    method flush_lazy {} {
+	variable lazy
+	if {!$lazy} {
+	    error "Can't flush lazy unless the Session is lazy which [self] is not."
+	}
+
+	::variable varmod
+	foreach coro [array names varmod] {
+	    my flush [namespace tail $coro] {*}$varmod($coro)
+	    unset varmod($coro)
+	}
+
+	after [expr {$lazy * 1000}] [list [self] flush_lazy]
+    }
+
     # varmod - record and return all session variable modifications
     method varmod {args} {
 	::variable varmod
 	if {![llength $args]} {
-	    set result {}
 	    if {[info exists varmod([info coroutine])]} {
 		Debug.session {varmod summary [info coroutine]/[namespace current] $varmod([info coroutine])}
-		set write {}; set unset {}
-		dict with varmod([info coroutine]) {}
+		set result $varmod([info coroutine])
 		unset varmod([info coroutine])
-		set result [list [dict keys $write] [dict keys $unset]]
+	    } else {
+		set result {}
 	    }
 	    Debug.session {varmod summary [info coroutine] $result}
 	    return $result
@@ -203,10 +218,15 @@ class create ::Session {
 	    }
 	    error "if you modify the session variable, you're not gonna have a good time."
 	}
-
+	::variable lazy
 	switch -- $op {
 	    write {
-		dict set varmod([info coroutine]) write $name1 1
+		if {$lazy} {
+		    # store the values for later writing to db
+		    dict set varmod([info coroutine]) write $name1 [uplevel #1 [list set $name1]]
+		} else {
+		    dict set varmod([info coroutine]) write $name1 1
+		}
 		catch {dict unset varmod([info coroutine]) unset $name1}
 	    }
 	    unset {
@@ -267,23 +287,30 @@ class create ::Session {
 	}
     }
 
-    # write back session variable changes
-    method write_back {id {changed {}} {null {}}} {
-	if {![llength $changed] && ![llength $null]} {
+    # flush - write back session variable changes
+    method flush {id args} {
+	set write {}; set unset {}
+	dict with args {}
+	if {![llength $write] && ![llength $unset]} {
 	    return
 	}
 	::variable cookie
 
-	foreach field $null {
+	foreach field [dict keys $unset] {
 	    if {$field eq $cookie} continue
 	    lappend vars $field=NULL
 	}
 
-	foreach field $changed {
+	::variable lazy
+	foreach {field value} $write {
 	    if {$field eq $cookie} continue
 	    incr i
 	    lappend vars $field=:V$i
-	    dict set values V$i [uplevel \#1 [list set $field]]
+	    if {$lazy} {
+		dict set values V$i $value
+	    } else {
+		dict set values V$i [uplevel \#1 [list set $field]]
+	    }
 	}
 
 	# prepared db command nulls field
@@ -314,6 +341,8 @@ class create ::Session {
 	    ::variable counter	;# introspection - count of session accesses
 
 	    ::variable handler	;# request handlers by coroutine
+	    ::variable lazy	;# is this session_manager lazy?
+
 	    Debug.session {shim $handler([info coroutine]) START}
 	    set id [namespace tail [info coroutine]]
 	    set r {}
@@ -350,7 +379,10 @@ class create ::Session {
 		# handle the request - if handler disappears, we're done
 		set r [uplevel 1 [list $handler([info coroutine]) do $r]]
 
-		my write_back $id {*}[my varmod]	;# write back session variable changes
+		if {!$lazy} {
+		    Debug.session {assiduous (non-lazy) flush}
+		    my flush $id {*}[my varmod]	;# write back session variable changes
+		}
 	    }
 	} [namespace current]]
     }
@@ -507,6 +539,7 @@ class create ::Session {
 	::variable expires "next month"	;# how long does this cookie live?
 	::variable cookie_args {}	;# extra args for cookie creation
 
+	::variable lazy 0		;# set lazy to some number of seconds to flush *only* periodically
 	::variable auto_establish 1	;# establish a persistent record for each new session?
 
 	::variable {*}[Site var? Session]	;# allow .config file to modify defaults
@@ -526,11 +559,12 @@ class create ::Session {
 	namespace eval [namespace current]::Coros {}
 
 	# set up the DB table
-	package require tdbc
-	package require tdbc::$tdbc
 	if {$db ne ""} {
 	    Debug.session {provided db: '$db'}
 	} elseif {$file ne ""} {
+	    package require tdbc
+	    package require tdbc::$tdbc
+
 	    set ons [namespace current]
 	    Debug.session {creating db: tdbc::${tdbc}::connection create [namespace current]::dbI $file $tdbc_opts}
 	    file mkdir [file dirname $file]
@@ -566,6 +600,10 @@ class create ::Session {
 	# prepare some sql statemtents to NULL and UPDATE session vars
 	Debug.session {session provides vars '$fields'}
 
+	if {$lazy} {
+	    after [expr {$lazy * 1000}] [list [self] flush_lazy]
+	}
+
 	package provide [namespace tail [self]] 1.0	;# hack to let Session instances create domains
     }
 }
@@ -584,7 +622,7 @@ class create SimpleSession {
 	[my prep "SELECT * FROM $cookie WHERE $cookie = :cookie"] foreach -as dicts -- rec [list cookie $id] {
 	    dict set record [dict get $rec name] [dict get $rec value]
 	}
-	variable fields; set fields [dict names $record]
+	variable fields; set fields [dict keys $record]
 	return $record
     }
 
@@ -603,19 +641,28 @@ class create SimpleSession {
 	return $fields($id)
     }
 
-    # write back session variable changes
-    method write_back {id {changed {}} {null {}}} {
+    # flush - write back session variable changes
+    method flush {id args} {
+	set write {}; set unset {}
+	dict with args {}
+	if {![llength $write] && ![llength $unset]} {
+	    return
+	}
 	::variable cookie
 
-	foreach field $null {
-	    if {$field eq $cookie} continue	;# skip modifications to cookie var
-	    lappend result [[my prep "DELETE FROM $cookie SET $field = NULL WHERE $cookie = :cookie AND name=:name"] allrows -- [list cookie $id name $field]]
-	}
+	my db transaction {
+	    foreach field [dict keys $unset] {
+		if {$field eq $cookie} continue	;# skip modifications to cookie var
+		lappend result [[my prep "DELETE FROM $cookie SET $field = NULL WHERE $cookie = :cookie AND name=:name"] allrows -- [list cookie $id name $field]]
+	    }
 
-	foreach field $changed {
-	    if {$field eq $cookie} continue	;# skip modifications to cookie var
-	    set value [uplevel \#1 [list set $field]]
-	    lappend result [[my prep "INSERT OR REPLACE INTO $cookie ($cookie,name,value) (:cookie,:name,:value)"] allrows -- [list cookie $id name $field value $value]]
+	    foreach {field value} $write {
+		if {$field eq $cookie} continue	;# skip modifications to cookie var
+		if {!$lazy} {
+		    set value [uplevel \#1 [list set $field]]
+		}
+		lappend result [[my prep "INSERT OR REPLACE INTO $cookie ($cookie,name,value) (:cookie,:name,:value)"] allrows -- [list cookie $id name $field value $value]]
+	    }
 	}
 
 	Debug.session {shim wrote back $result}
