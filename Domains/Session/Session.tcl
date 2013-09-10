@@ -84,6 +84,11 @@ class create ::Session {
 	namespace tail [info coroutine]
     }
 
+    # establish - establish/persist *this* session
+    classmethod establish {} {
+	uplevel #1 my close [info coroutine]	;# redirect to Session instance
+    }
+
     # Session variable - map a session variable into local scope
     classmethod variable {args} {
 	uplevel 1 [list [uplevel #1 self] variable {*}$args]	;# redirect to Session instance
@@ -164,8 +169,11 @@ class create ::Session {
     }
 
     # variables - the set of session variables
-    classmethod variables {session} {	# access from within a session
-	uplevel #1 my close [info coroutine]	;# redirect to session instance
+    classmethod variables {{session ""}} {	# access from within a session
+	if {$session eq ""} {
+	    return [uplevel #1 my variables [info coroutine]]	;# redirect to session instance
+	} else {
+	}
     }
     method variables {session} {
 	::variable variables; return $variables($session)
@@ -204,13 +212,12 @@ class create ::Session {
 
 	lassign $args id name1 name2 op
 	Debug.session {varmod [string toupper $op]: [info coroutine]/[namespace current] $args}
-	#puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
+	puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
 	::variable cookie
 	if {$name1 eq $cookie} {
 	    # the user has tried to modify the session variable
 	    # reset it to what it should be, and error.
-	    upvar #1 $cookie session_var
-	    set session_var $id
+	    set session_var [uplevel #1 [list set $cookie $id]]
 	    if {$op eq "unset"} {
 		# have to re-establish the trace
 		uplevel #1 [list ::trace add variable $name1 {write unset} [list [my self] varmod $id]]
@@ -289,6 +296,8 @@ class create ::Session {
 
     # flush - write back session variable changes
     method flush {id args} {
+	variable established; if {!$established($id)} return
+
 	set write {}; set unset {}
 	dict with args {}
 	if {![llength $write] && ![llength $unset]} {
@@ -361,6 +370,7 @@ class create ::Session {
 		::variable cookie	;# name of cookie
 		if {![info exists variables([info coroutine])]} {
 		    set vars [my fetch $id]
+		    dict set vars $cookie $id	;# the session var always exists
 		    Debug.session {shim $handler([info coroutine]) VARS ([my fields $id]) fetched ($vars)}
 		    foreach n [my fields $id] {
 			Debug.session {shim $handler([info coroutine]) var $n}
@@ -398,39 +408,57 @@ class create ::Session {
     # check - does session $id have any persistent records?
     method check {id} {
 	# check the state of this session
-	set stored [my fetch $id]
 	::variable cookie
 	set check [lindex [[my prep "SELECT count(*) FROM $cookie WHERE $cookie = :cookie"] allrows -- [list cookie $id]] 0]
-	Debug.session {CHECK $check ($stored)}
-	return [list [lindex $check 1] $stored]
+	Debug.session {CHECK $check}
+	return [lindex $check 1]
     }
 
     # establish - create a minimal record for session
-    method establish {id} {
+    method establish {{id ""}} {
+	Debug.session {establishing $id}
+	if {$id eq ""} {
+	    set id [namespace tail [info coroutine]]
+	} elseif {$id ne [namespace tail [info coroutine]]} {
+	    error "Can't establish a different session"
+	}
+	variable established
+	if {$established($id)} {
+	    Debug.session {establish $id - already established}
+	    return	;# already established
+	}
+
 	::variable cookie
 	set result [[my prep "INSERT INTO $cookie ($cookie) VALUES (:cookie)"] allrows -- [list cookie $id]]
+	set established($id) 1
+
 	Debug.session {establish 'INSERT INTO $cookie ($cookie) VALUES ($id)' $id -> $result}
     }
 
     # Establish - set up a session record for $id
     method Establish {id} {
 	::variable cookie
-	lassign [my check $id] check stored	;# check the state of the session
-	switch -- $check,[dict exists $stored $cookie] {
+
+	# check the state of the session
+	set stored [my fetch $id]
+	switch -- [my check $id],[dict exists $stored $cookie] {
 	    0,0 {
 		# no record for this session
-		variable auto_establish
-		if {$auto_establish} {
+		variable establish
+		if {$establish} {
 		    Debug.session {No data for $id - make some}
 		    my establish $id
+
 		    Debug.session {CHECK [my check $id]}
 		} else {
-		    Debug.session {No data for $id - no auto_establish}
+		    Debug.session {No data for $id - no establish}
+		    variable established; set established($id) 0
 		}
 	    }
 	    1,1 {
 		# the session is persistent *and* has data
 		Debug.session {session $id has data ($stored)}
+		variable established; set established($id) 1
 	    }
 	    1,0 -
 	    0,1 -
@@ -459,6 +487,7 @@ class create ::Session {
 	# fetch or create a cookie session identifier
 	Debug.session {session cookie $cookie: [Cookies Fetch? $r -name $cookie] / ([dict get $r -cookies])}
 	set id [Cookies Fetch? $r -name $cookie]
+	variable established; set established($id) 0
 	if {$id eq ""} {
 	    # There is no session cookie - create a new session, id, and cookie
 	    Debug.session {create new session}
@@ -540,7 +569,7 @@ class create ::Session {
 	::variable cookie_args {}	;# extra args for cookie creation
 
 	::variable lazy 0		;# set lazy to some number of seconds to flush *only* periodically
-	::variable auto_establish 1	;# establish a persistent record for each new session?
+	::variable establish 1		;# auto-establish a persistent record for each new session?
 
 	::variable {*}[Site var? Session]	;# allow .config file to modify defaults
 	::variable {*}$args
@@ -554,6 +583,8 @@ class create ::Session {
 	array set variables {}
 	::variable varmod		;# record session var mods per coro
 	array set varmod {}
+	::variable established		;# has this session been persisted?
+	array set established {}
 
 	# create the local namespace within which all coros will be created
 	namespace eval [namespace current]::Coros {}
@@ -611,6 +642,18 @@ class create ::Session {
 class create SimpleSession {
     # establish - create a minimal record for session
     method establish {id} {
+	if {$id eq ""} {
+	    set id [namespace tail [info coroutine]]
+	} elseif {$id ne [namespace tail [info coroutine]]} {
+	    error "Can't establish a different session"
+	}
+	variable established
+	if {$established($id)} {
+	    return	;# already established
+	} else {
+	    set established($id) 1
+	}
+
 	::variable cookie
 	[my prep "INSERT INTO $cookie ($cookie,name,value) VALUES (:cookie,$cookie,:cookie)"] allrows -- [list cookie $id]
     }
@@ -629,11 +672,10 @@ class create SimpleSession {
     # check - does session $id have any persistent records?
     method check {id} {
 	# check the state of this session
-	set stored [my fetch $id]
 	::variable cookie
 	set check [lindex [[my prep "SELECT count(*) FROM $cookie WHERE $cookie = :cookie"] allrows -- [list cookie $id]] 0]
-	Debug.session {CHECK $check ($stored)}
-	return [list [expr {[lindex $check 1]>0}] $stored]
+	Debug.session {CHECK $check}
+	return [expr {[lindex $check 1]>0}]
     }
 
     method fields {id} {
@@ -643,6 +685,8 @@ class create SimpleSession {
 
     # flush - write back session variable changes
     method flush {id args} {
+	variable established; if {!$established($id)} return
+
 	set write {}; set unset {}
 	dict with args {}
 	if {![llength $write] && ![llength $unset]} {
