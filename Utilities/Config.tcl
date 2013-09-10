@@ -25,7 +25,7 @@ oo::class create Config {
     # for error reporting
     method line {interval script} {
 	lassign $interval start
-	set line 0
+	set line 1
 	for {set i 0} {$i < $start} {incr i} {
 	    if {[string index $script $i] eq "\n"} {
 		incr line
@@ -37,6 +37,9 @@ oo::class create Config {
     # errors - return (optionally reset) parse errors
     method errors {{erase 0}} {
 	variable errors
+	if {![info exists errors]} {
+	    return {}
+	}
 	set result $errors
 	if {$erase} {
 	    set errors {}
@@ -44,10 +47,20 @@ oo::class create Config {
 	return $result
     }
 
+    # parser_error - record a parser error
+    method parser_error {script level text {location ""}} {
+	if {$location ne ""} {
+	    set location [my line $location $script]
+	}
+	set error [list $level $text $location]
+	#puts stderr "CONF ERR: $error"
+	Debug.config {$level: $error}
+	variable errors; lappend errors $error
+    }
+    
     # parse a single section into raw alist, comments and metadata
     method parse_section {section script} {
 	variable raw; variable comments; variable metadata
-	variable errors
 	variable clean 0
 
 	# perform script transformation
@@ -61,11 +74,11 @@ oo::class create Config {
 		set left [lindex $cmd 3]
 		set varname [parsetcl unparse $left]	;# literal name
 		if {![string match L* [lindex $left 0]]} {
-		    lappend errors "Error: Variable name '$varname' must be a literal ($left)"
+		    my parser_error $script Error "Variable name '$varname' must be a literal ($left)" [lindex $cmd 1]
 		} else {
 		    # see if this variable duplicates an existing variable
 		    if {[dict exists $raw $section $varname]} {
-			lappend errors "Warning: Variable $section.$varname is duplicated at line [my line [lindex $cmd 1] $script]"
+			my parser_error $script Warning "Variable '$section.$varname' is duplicated" [lindex $cmd 1]
 		    }
 
 		    set rest [lrange $cmd 4 end]
@@ -87,7 +100,7 @@ oo::class create Config {
 	    dict set comments $section $varname [lindex $body {*}$index]
 	} Ne {
 	    set cmd [lindex $parse {*}$index]
-	    lappend errors "Syntax Error at line [my line [lindex $cmd 1] $script] - $cmd"
+	    my parser_error $script Error "Syntax Error ($cmd)" [lindex $cmd 1]
 	}
 
 	Debug.config {section: raw:($raw)}
@@ -114,23 +127,21 @@ oo::class create Config {
     # parse a complete configuration into raw, comments and metadata
     method parse {script} {
 	variable raw; variable comments; variable metadata
-	variable errors
 
 	set parse [parsetcl simple_parse_script $script]
 	parsetcl walk_tree parse index Cd {
 	    if {[llength $index] == 1} {
 		set cmd [lindex $parse {*}$index]
-
+		
 		set left [lindex $cmd 3]
 		set section [parsetcl unparse $left]
 		if {![string match L* [lindex $left 0]]} {
-		    lappend errors "Error: Section name '$section' must be a literal ($left) at line [my line [lindex $cmd 1] $script]"
+		    my parser_error $script Error "Section name '$section' must be a literal ($left)" [lindex $cmd 1]
 		} else {
 		    if {[dict exists $raw $section]} {
 			# this section duplicates an existing section
-			lappend errors "Warning: Section $section is duplicated at line [my line [lindex $cmd 1] $script]"
+			my parser_error $script Warning "Section '$section' is duplicated" [lindex $cmd 1]
 		    }
-
 
 		    set rest [lrange $cmd 4 end]
 		    set right [lindex $rest end]
@@ -160,7 +171,7 @@ oo::class create Config {
 	    #puts stderr "Comment - $cmd"
 	} Ne {
 	    set cmd [lindex $parse {*}$index]
-	    lappend errors "Syntax Error at line [my line [lindex $cmd 1] $script] - $cmd"
+	    my parser_error $script Error "Syntax Error ($cmd)" [lindex $cmd 1]
 	}
 
 	Debug.config {parse: ($raw)}
@@ -177,9 +188,9 @@ oo::class create Config {
     # parse a file in config format
     method load {file} {
 	package require fileutil
-	variable errors {}
+	my errors 1
 	my parse [::fileutil::cat -- $file]
-	return $errors
+	return [my errors]
     }
 
     # assign - assign config dict from args
@@ -311,7 +322,7 @@ oo::class create Config {
     method extract {{config ""}} {
 	if {$config ne ""} {
 	    # parse $config if proffered
-	    variable errors {}
+	    my errors 1
 	    my parse $config
 	}
 
@@ -394,6 +405,7 @@ oo::class create Config {
 	variable raw {}	;# association between name and tcl script giving value
 	variable comments {}	;# association between name and run-on comments
 	variable metadata {}	;# association between name and metadata
+	variable errors {}	;# parser error list
 
 	# destroy evaluation namespace
 	catch {namespace delete _C}
@@ -416,6 +428,7 @@ oo::class create Config {
 	    dict set args config $cf
 	}
 	variable {*}$args
+
 	#catch {set args [dict merge [Site var? Config] $args]}	;# allow .ini file to modify defaults -- config is, itself, not Configurable
 
 	my clear	;# start with a clean slate
@@ -425,7 +438,6 @@ oo::class create Config {
 	    my load $file	;# parse any file passed in
 	}
 
-	variable errors {}
 	if {[info exists config]} {
 	    my parse $config	;# parse any literal config passed in
 	}

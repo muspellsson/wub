@@ -368,30 +368,31 @@ class create ::Session {
 	    Debug.session {fetched session cookie: $id}
 	}
 
-	# check the state of the session
-	lassign [my check $id] check stored
-	switch -- $check,[dict exists $stored $cookie] {
-	    0,0 {
-		# no record for this session
-		Debug.session {No data for $id - make some}
-		[my "prep INSERT INTO $cookie ($cookie) VALUES (:cookie)"] allrows -- [list cookie $id]
-		Debug.session {CHECK [my check $id]}
-	    }
-	    1,1 {
-		# the session is persistent *and* has data
-		Debug.session {session $id has data ($stored)}
-	    }
-
-	    1,0 -
-	    0,1 -
-	    default {
-		error "Impossible State ($check,[dict size $stored]) checking session $id"
-	    }
-	}
-
 	# find active session with $id
 	set coro [namespace current]::Coros::$id	;# remember session coro name
 	if {![llength [info commands $coro]]} {
+
+	    # check the state of the session
+	    lassign [my check $id] check stored
+	    switch -- $check,[dict exists $stored $cookie] {
+		0,0 {
+		    # no record for this session
+		    Debug.session {No data for $id - make some}
+		    [my "prep INSERT INTO $cookie ($cookie) VALUES (:cookie)"] allrows -- [list cookie $id]
+		    Debug.session {CHECK [my check $id]}
+		}
+		1,1 {
+		    # the session is persistent *and* has data
+		    Debug.session {session $id has data ($stored)}
+		}
+
+		1,0 -
+		0,1 -
+		default {
+		    error "Impossible State ($check,[dict size $stored]) checking session $id"
+		}
+	    }
+
 	    # we don't have an active session for this id - create one
 	    variable handler; variable handlers
 	    set handler($coro) $handlers([dict get $r -section])	;# get handler

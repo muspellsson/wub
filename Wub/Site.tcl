@@ -329,6 +329,12 @@ namespace eval ::Site {
 	#Debug on config
 
 	Config create config $configuration
+	if {[llength [config errors]]} {
+	    foreach err [config errors 1] {
+		Debug.error {Config $err}
+	    }
+	}
+
 	namespace export -clear *
 	namespace ensemble create -subcommands {}
 	unset configuration	;# done with configuration var
@@ -368,12 +374,13 @@ namespace eval ::Site {
 	    set phase "Site user configuration"	;# move to site config files phase
 	    if {[file exists [dict get $C Wub config]]} {
 		config aggregate [Config create user file [dict get $C Wub config]]
-		set C [config extract]	;# extract configuration values
 		if {[llength [user errors]]} {
 		    foreach err [user errors 1] {
 			Debug.error {UserConfig $err}
 		    }
 		}
+
+		set C [config extract]	;# extract configuration values
 		if {[llength [config errors]]} {
 		    foreach err [config errors 1] {
 			Debug.error {Config $err}
@@ -389,12 +396,13 @@ namespace eval ::Site {
 	    puts stderr "Local Config"
 	    set phase "Site local configuration"	;# merge in local.config
 	    config aggregate [Config create local_config file [file join [dict get $C Wub home] local.config]]
-	    set C [config extract]	;# extract configuration values
 	    if {[llength [local_config errors]]} {
 		foreach err [local_config errors 1] {
-		    Debug.error {UserConfig $err}
+		    Debug.error {LocalConfig $err}
 		}
 	    }
+
+	    set C [config extract]	;# extract configuration values
 	    if {[llength [config errors]]} {
 		foreach err [config errors 1] {
 		    Debug.error {Config $err}
