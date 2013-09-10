@@ -183,9 +183,18 @@ class create ::Session {
 	    return $result
 	}
 
-	lassign $args name1 name2 op
+	lassign $args id name1 name2 op
 	Debug.session {varmod [string toupper $op]: [info coroutine]/[namespace current] $args}
 	#puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
+	::variable cookie
+	if {$name1 eq $cookie} {
+	    # the user has tried to modify the session variable
+	    # reset it to what it should be, and error.
+	    upvar #1 $cookie session_var
+	    set session_var $id
+	    error "if you modify the session variable, you're not gonna have a good time."
+	}
+
 	switch -- $op {
 	    write {
 		dict set varmod([info coroutine]) write $name1 1
@@ -213,20 +222,23 @@ class create ::Session {
     # prep - prepare a stmt or reused an already cached stmt
     method prep {stmt} {
 	variable stmts	;# here are some statements we prepared earlier
+	if {![info exists stmts]} {
+	    set stmts {}
+	}
 	variable max_prepcache
-	if {[info exists stmts($stmt)]} {
-	    set s $stmts($stmt)
+	if {[dict exists $stmts $stmt]} {
+	    set s [dict get $stmts $stmt]
 	    if {$max_prepcache > 0} {
 		# move matched element to end of cache (for LRU)
-		unset stmts($stmt)
-		set stmts($stmt) $s
+		dict unset stmts $stmt
+		dict set stmts $stmt $s
 	    }
 	} else {
 	    set s [my db prepare $stmt]
-	    set stmts($stmt) $s
-	    if {$max_prepcache > 0 && [array size stmts] > $max_prepcache} {
-		Debug.store {removing LRU cached statement}
-		array set stmts [lrange [array get stmts] 2 end]
+	    dict set stmts $stmt $s
+	    if {$max_prepcache > 0 && [dict size $stmts] > $max_prepcache} {
+		Debug.session {removing LRU cached statement}
+		set stmts [lrange $stmts 2 end]
 	    }
 	}
 	return $s
@@ -284,14 +296,14 @@ class create ::Session {
 		    Debug.session {shim $handler([info coroutine]) VARS ($fields) fetched ($vars)}
 		    foreach n $fields {
 			Debug.session {shim $handler([info coroutine]) var $n}
-			catch {uplevel #1 [list ::trace remove variable $n {write unset} [list [my self] varmod]]}
+			catch {uplevel #1 [list ::trace remove variable $n {write unset} [list [my self] varmod $id]]}
 			if {[dict exists $vars $n]} {
 			    Debug.session {shim var assigning $n<-'[dict get $vars $n]'}
 			    uplevel #1 [list set $n [dict get $vars $n]]
 			} else {
 			    catch {uplevel #1 [list unset $n]}
 			}
-			uplevel #1 [list ::trace add variable $n {write unset} [list [my self] varmod]]
+			uplevel #1 [list ::trace add variable $n {write unset} [list [my self] varmod $id]]
 			lappend variables([info coroutine]) $n
 		    }
 		}
