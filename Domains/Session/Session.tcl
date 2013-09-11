@@ -210,9 +210,9 @@ class create ::Session {
 	if {[catch {
 	    lassign $args id name1 name2 op
 	    Debug.session {varmod [string toupper $op]: [info coroutine]/[namespace current] $args}
-	    puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
+	    # puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
 	    ::variable cookie
-	    if {0 && $name1 eq $cookie} {
+	    if {$name1 eq $cookie} {
 		# the user has tried to modify the session variable
 		# reset it to what it should be, and error.
 		set session_var [uplevel #1 [list set $cookie $id]]
@@ -279,20 +279,6 @@ class create ::Session {
 	    }
 	}
 	return $s
-    }
-
-    if {0} {
-	# null - null the persistent variable named $field for session $id
-	method null {id field} {
-	    ::variable cookie
-	    [my prep "UPDATE $cookie SET $field = NULL WHERE $cookie = :cookie"] allrows -- [list cookie $id]
-	}
-    
-	# update - update the persistent variable named $field for session $id
-	method update {id field value} {
-	    ::variable cookie
-	    [my prep "UPDATE $cookie SET $field = :value WHERE $cookie = :cookie"] allrows -- [list value $value cookie $id]
-	}
     }
 
     # flush - write back session variable changes
@@ -778,6 +764,23 @@ if {0} {
 
 	    Session variable session
 	    return [Http NoCache [Http Ok $r [<p> "COUNT $counter in $session"]]]
+	}
+
+	proc /variables {r} {
+	    return [Http NoCache [Http Ok $r [<p> "VARIABLES [Session variables]"]]]
+	}
+
+	proc /establish/1 {r} {
+	    Session establish	;# this makes this session persist
+	    Session variable session
+	    return [Http NoCache [Http Ok $r [<p> "ESTABLISHED $session"]]]
+	}
+
+	proc /establish {r} {
+	    puts stderr "Called /establish"
+	    Session establish	;# this makes this session persist
+	    puts stderr "Called Session establish"
+	    return [Http NoCache [Http Ok $r [<p> "ESTABLISHED"]]]
 	}
 
 	proc /unset {r} {
