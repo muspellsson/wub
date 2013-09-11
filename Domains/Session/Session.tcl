@@ -5,8 +5,9 @@
 #
 # ARCHITECTURE:
 #
-# Cookies shouldn't be sent with a path of /, because it screws up caching
-# Session maintains a key in cookie which is sent within a constrained path.
+# Cookies shouldn't be sent with a path of /, because it screws up caching of static content.
+#
+# Session maintains a key in cookie $cookie which is sent within a constrained path.
 # (a) how can a cookie within a constrained path be used
 # everywhere on a site when it's only sent for a subpath of the site - use a
 # web-bug technique - load some file from session domain on every page, don't cache
@@ -15,50 +16,12 @@
 # client?  Javascript.  Send javascript from the web bug.
 #
 # IMPLEMENTATION:
-# Sessions are records in a database which are stored in the corovar scope (uplevel #1)
+# Sessions are records in a tdbc table which are mirrored in the corovar scope (uplevel #1)
 # the cookie maps to a defined coroutine which is maintained by Session, and in which all
 # request processing occurs.
 
-# If the session subdict changes during processing of the request, changes will
+# If the session variables change during processing of the request, changes will
 # be rewritten to the database.
-#
-# Examples:
-#
-# 1) Fetch a session
-#
-#	set req [Session fetch $req] ;# fetch session specified by cookie
-#	set session [dict get $req -session]	;# this is the session dict
-#	if {[dict exists $session _key]} {
-#		# this is an existing session
-#		puts "[dict get $session _key] is the session key"
-#	} else {
-#		# this is a brand new session (as no key has been assigned)
-#	}
-#
-# 2) Modify/use session state
-#
-# FIRST:
-#	dict set req -session somevar $value	;# set a session variable
-#
-# THEN:
-#	dict with req -session {
-#		... modify existing variables - only works on existing sessions
-#		# risky unless you can control the contents of the dict,
-#		# as any element in dict *will* overwrite other vars.
-#	}
-# OR:
-#	Session with req {
-#		... modify existing variables
-#	}
-#
-# FINALLY:
-#	set rsp [Session store $req]	;# session doesn't exist until stored
-#	return $rsp			;# the rsp will have required cookies
-#
-# 3) Remove a session from the database
-#
-#	set rsp [Session remove $req]
-#	return $rsp
 
 package require Debug
 Debug define session 10
@@ -70,12 +33,23 @@ set ::API(Session) {
     {
 	Session manager
     }
-    cookie {session cookie name (default "session")}
-    cpath {session cookie path (default "/" - this default is a bad idea)}
-    db {open tdbc database}
-    file {session database (default session.db)}
-    schema {session table schema}
-    schemafile {file containing session table schema}
+
+    lazy {to number of seconds to flush *only* periodically (default: 0 - flush every time.)}
+    establish {auto-establish a persistent record for each new session? (default: yes)}
+
+    tdbc {Which TDBC backend type should be used (default: sqlite3)}
+    db {an already-connected tdbc db (default none - use $schema to create $table in $file)}
+    file {a db file to be created (default none)}
+    tdbc_opts {::tdbc::connection creation options (default "")}
+    schemafile {a file containing a schema for table creation}
+    schema {schema to create the session table, if no $db is specified}
+    table {name of the session table for storing session vars (default: $cookie)}
+    key {name of the field for session key var / session id (default: $cookie)}
+
+    cookie {session cookie name (default: "session")}
+    cpath {session cookie path - this (default "/" is a bad idea.)}
+    expires {how long does this cookie live? (default "next month")}
+    cookie_args {extra args for cookie creation}
 }
 
 class create ::Session {
@@ -118,7 +92,7 @@ class create ::Session {
     }
     method sessionvar {} {
 	# the name of the session variable
-	::variable cookie; return $cookie
+	variable key; return $key
     }
 
     # close - a session within this Session
@@ -127,22 +101,19 @@ class create ::Session {
     }
     method close {session} {
 	# close the named session
-	::variable handler
+	variable handler
 	unset handler($session)
     }
 
-    # /close - Direct Domain closure of session
+    # /close - Direct Domain closure of this session
     method /close {r} {
 	variable ::cookie
-	set id [dict get? [Cookies Fetch? $r -name $cookie] -value]
-	if {$id ne ""} {
-	    # we are inside the subject domain, so can use their cookie
-	    set id [dict get [Cookies Fetch $r -name $cookie] -value]
-	    set coro [namespace current]::Coros::$id	;# remember session coro name
-	    my close $coro
-	} else {
-	    error "No Such Session"
-	}
+	set id [namespace tail [info coroutine]]
+
+	# we are inside the subject domain, so can use their cookie
+	set id [dict get [Cookies Fetch $r -name $cookie] -value]
+	set coro [namespace current]::Coros::$id	;# remember session coro name
+	my close $coro
     }
 
     # idle - return list of sessions idle longer than the proffered time
@@ -174,7 +145,7 @@ class create ::Session {
 	return [uplevel #1 my variables [info coroutine]]	;# redirect to session instance
     }
     method variables {session} {
-	::variable variables; return $variables($session)
+	variable variables; return $variables($session)
     }
 
     # flush_lazy - flush all pending mods to the db
@@ -184,7 +155,7 @@ class create ::Session {
 	    error "Can't flush lazy unless the Session is lazy which [self] is not."
 	}
 
-	::variable varmod
+	variable varmod
 	foreach coro [array names varmod] {
 	    my flush [namespace tail $coro] {*}$varmod($coro)
 	    unset varmod($coro)
@@ -195,7 +166,7 @@ class create ::Session {
 
     # varmod - record and return all session variable modifications
     method varmod {args} {
-	::variable varmod
+	variable varmod
 	if {![llength $args]} {
 	    if {[info exists varmod([info coroutine])]} {
 		Debug.session {varmod summary [info coroutine]/[namespace current] $varmod([info coroutine])}
@@ -211,11 +182,11 @@ class create ::Session {
 	    lassign $args id name1 name2 op
 	    Debug.session {varmod [string toupper $op]: [info coroutine]/[namespace current] $args}
 	    # puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
-	    ::variable cookie
-	    if {$name1 eq $cookie} {
+	    variable key
+	    if {$name1 eq $key} {
 		# the user has tried to modify the session variable
 		# reset it to what it should be, and error.
-		set session_var [uplevel #1 [list set $cookie $id]]
+		set session_var [uplevel #1 [list set $key $id]]
 		if {$op eq "unset"} {
 		    # have to re-establish the trace
 		    uplevel #1 [list ::trace add variable $name1 {write unset} [list [my self] varmod $id]]
@@ -223,7 +194,7 @@ class create ::Session {
 		}
 		error "if you modify the session variable, you're not gonna have a good time."
 	    }
-	    ::variable lazy
+	    variable lazy
 	    switch -- $op {
 		write {
 		    if {$lazy} {
@@ -246,9 +217,9 @@ class create ::Session {
 
     # corodead - the coroutine has died, clean up after it.
     method corodead {coro args} {
-	::variable variables; catch {unset variables($coro)}
-	::variable active; catch {unset active($coro)}
-	::variable counter; catch {unset counter($coro)}
+	variable variables; catch {unset variables($coro)}
+	variable active; catch {unset active($coro)}
+	variable counter; catch {unset counter($coro)}
     }
 
     # self - for the shim
@@ -295,16 +266,16 @@ class create ::Session {
 	    Debug.session {flush $id nothing to flush}
 	    return
 	}
-	::variable cookie
+	variable key
 
 	foreach field [dict keys $unset] {
-	    if {$field eq $cookie} continue
+	    if {$field eq $key} continue
 	    lappend vars $field=NULL
 	}
 
-	::variable lazy
+	variable lazy
 	foreach {field value} $write {
-	    if {$field eq $cookie} continue
+	    if {$field eq $key} continue
 	    incr i
 	    lappend vars $field=:V$i
 	    if {$lazy} {
@@ -315,19 +286,20 @@ class create ::Session {
 	}
 
 	# prepared db command nulls field
-	dict set values cookie $id
-	Debug.session {flush 'UPDATE $cookie SET [join $vars ,] WHERE $cookie = $id' over ($values)}
-	set result [[my prep "UPDATE $cookie SET [join $vars ,] WHERE $cookie = :cookie"] allrows -- $values]
+	variable table
+	variable key
+	dict set values key $id
+	Debug.session {flush 'UPDATE $table SET [join $vars ,] WHERE $key = $id' over ($values)}
+	set result [[my prep "UPDATE $table SET [join $vars ,] WHERE $key = :key"] allrows -- $values]
 
 	Debug.session {flushed $result}
     }
 
     # name of all known session $id variables
     method fields {id} {
-	::variable fields		;# names of all known session variables
+	variable fields		;# names of all known session variables
 	if {![info exists fields]} {
-	    ::variable cookie
-	    set fields [dict keys [my db columns $cookie]]
+	    variable table; set fields [dict keys [my db columns $table]]
 	}
 	return $fields
     }
@@ -338,11 +310,11 @@ class create ::Session {
     # the [my] command will invoke in this Session instance.
     method shim {args} {
 	::apply [list {} {
-	    ::variable active	;# introspection - last session access
-	    ::variable counter	;# introspection - count of session accesses
+	    variable active	;# introspection - last session access
+	    variable counter	;# introspection - count of session accesses
 
-	    ::variable handler	;# request handlers by coroutine
-	    ::variable lazy	;# is this session_manager lazy?
+	    variable handler	;# request handlers by coroutine
+	    variable lazy	;# is this session_manager lazy?
 
 	    Debug.session {shim $handler([info coroutine]) START}
 	    set id [namespace tail [info coroutine]]
@@ -358,11 +330,12 @@ class create ::Session {
 
 		# fetch session variables by key
 		# do it only when we've got a real request
-		::variable variables	;# introspect session var names
-		::variable cookie	;# name of cookie
+		variable variables	;# introspect session var names
+		variable cookie		;# name of cookie
+		variable key
 		if {![info exists variables([info coroutine])]} {
 		    set vars [my fetch $id]
-		    dict set vars $cookie $id	;# the session var always exists
+		    dict set vars $key $id	;# the session var always exists
 		    Debug.session {shim $handler([info coroutine]) VARS ([my fields $id]) fetched ($vars)}
 		    foreach n [my fields $id] {
 			Debug.session {shim $handler([info coroutine]) var $n}
@@ -391,8 +364,9 @@ class create ::Session {
 
     # fetch - fetch variables for session $id
     method fetch {id} {
-	::variable cookie
-	set result [lindex [[my prep "SELECT * FROM $cookie WHERE $cookie = :cookie"] allrows -as dicts -- [list cookie $id]] 0]
+	variable table
+	variable key
+	set result [lindex [[my prep "SELECT * FROM $table WHERE $key = :key"] allrows -as dicts -- [list key $id]] 0]
 	Debug.session {fetch ($result)}
 	return $result
     }
@@ -400,8 +374,9 @@ class create ::Session {
     # check - does session $id have any persistent records?
     method check {id} {
 	# check the state of this session
-	::variable cookie
-	set check [lindex [[my prep "SELECT count(*) FROM $cookie WHERE $cookie = :cookie"] allrows -- [list cookie $id]] 0]
+	variable table
+	variable key
+	set check [lindex [[my prep "SELECT count(*) FROM $table WHERE $key = :key"] allrows -- [list key $id]] 0]
 	Debug.session {CHECK $check}
 	return [lindex $check 1]
     }
@@ -421,23 +396,25 @@ class create ::Session {
 	    return	;# already established
 	}
 
-	::variable cookie
-	set result [[my prep "INSERT INTO $cookie ($cookie) VALUES (:cookie)"] allrows -- [list cookie $id]]
+	variable table
+	variable key
+	set result [[my prep "INSERT INTO $table ($key) VALUES (:key)"] allrows -- [list key $id]]
 	set established($id) 1
 
-	Debug.session {established 'INSERT INTO $cookie ($cookie) VALUES ($id)' -> $result}
+	Debug.session {established 'INSERT INTO $table ($key) VALUES ($id)' -> $result}
     }
 
     # Establish - set up a session record for $id
     method Establish {id} {
-	::variable cookie
-	::variable established
-	# check the state of the session
+	variable established
+	variable key
 	set stored [my fetch $id]
-	switch -- [my check $id],[dict exists $stored $cookie] {
+
+	# check the state of the session
+	switch -- [my check $id],[dict exists $stored $key] {
 	    0,0 {
 		# no record for this session
-		::variable establish
+		variable establish
 		set established($id) 0
 		if {$establish} {
 		    Debug.session {No data for $id - make some}
@@ -474,9 +451,9 @@ class create ::Session {
 	}
 
 	# the URL is (presumably) in one of the handled subdomains
-	::variable cookie
 
 	# fetch or create a cookie session identifier
+	variable cookie
 	Debug.session {session cookie $cookie: [Cookies Fetch? $r -name $cookie] / ([dict get $r -cookies])}
 	set id [Cookies Fetch? $r -name $cookie]
 	variable established
@@ -485,10 +462,10 @@ class create ::Session {
 	    Debug.session {create new session}
 
 	    # create new session id
-	    ::variable uniq; set id [::md5::md5 -hex [self][incr uniq][clock microseconds]]
+	    variable uniq; set id [::md5::md5 -hex [self][incr uniq][clock microseconds]]
 
 	    # create the cookie
-	    ::variable cpath; ::variable expires; ::variable cookie_args;
+	    variable cpath; variable expires; variable cookie_args;
 	    set r [Cookies Add $r -path $cpath -expires $expires {*}$cookie_args -name $cookie -value $id]
 	    set established($id) 0
 	    Debug.session {new session: $id - cookies [dict get $r -cookies]}
@@ -512,7 +489,7 @@ class create ::Session {
 	    trace add command $coro delete [list [self] corodead]
 	} else {
 	    # the coro's running
-	    ::variable established
+	    variable established
 	    Debug.session {existing coro.  established? $established($id)}
 	}
 
@@ -528,7 +505,7 @@ class create ::Session {
 
 	set mount [dict get $args mount]
 	package require $domain
-	::variable handlers
+	variable handlers
 	set handlers($mount) [namespace eval ::Domains::$mount [list $domain new {*}$args]]
 	return [self]
     }
@@ -540,7 +517,7 @@ class create ::Session {
 	set mount [dict get $args mount]
 	set domain [dict get $args domain]
 	package require $domain
-	::variable handlers
+	variable handlers
 	set handlers($name) [$domain create $name {*}$args]
 	return [self]
     }
@@ -552,34 +529,43 @@ class create ::Session {
     superclass Direct
     constructor {args} {
 	Debug.session {constructing [self] $args}
-	::variable tdbc sqlite3		;# TDBC backend
-	::variable db ""		;# already open db
-	::variable file ""		;# or db file
-	::variable tdbc_opts {}		;# ::tdbc::connection creation options
-	::variable schemafile ""	;# file containing schema
-	::variable schema {}		;# schema for empty dbs
-	
-	::variable cookie "session"	;# session cookie name
-	::variable cpath "/"		;# session cookie path - this default is a bad idea.
-	::variable expires "next month"	;# how long does this cookie live?
-	::variable cookie_args {}	;# extra args for cookie creation
+	variable tdbc sqlite3		;# TDBC backend
+	variable db ""			;# already open db
+	variable file ""		;# or db file
+	variable tdbc_opts {}		;# ::tdbc::connection creation options
+	variable schemafile ""		;# file containing schema
+	variable schema {}		;# schema for empty dbs
+	variable table ""		;# table for session vars
+	variable key ""			;# field for session key var
 
-	::variable lazy 0		;# set lazy to some number of seconds to flush *only* periodically
-	::variable establish 1		;# auto-establish a persistent record for each new session?
+	variable cookie "session"	;# session cookie name
+	variable cpath "/"		;# session cookie path - this default is a bad idea.
+	variable expires "next month"	;# how long does this cookie live?
+	variable cookie_args {}		;# extra args for cookie creation
 
-	::variable {*}[Site var? Session]	;# allow .config file to modify defaults
-	::variable {*}$args
+	variable lazy 0			;# set lazy to number of seconds to flush *only* periodically
+	variable establish 1		;# auto-establish a persistent record for each new session?
+
+	variable {*}[Site var? Session]	;# allow .config file to modify defaults
+	variable {*}$args
 	next {*}$args
 
-	::variable handlers		;# handlers created by this session manager
+	if {$table eq ""} {
+	    set table $cookie		;# default table is named for cookie
+	}
+	if {$key eq ""} {
+	    set key $cookie		;# default session key field is named for cookie
+	}
+
+	variable handlers		;# handlers created by this session manager
 	array set handlers {}
-	::variable active		;# activity time per coro
+	variable active		;# activity time per coro
 	array set active {}
-	::variable variables		;# session variables per coro
+	variable variables		;# session variables per coro
 	array set variables {}
-	::variable varmod		;# record session var mods per coro
+	variable varmod		;# record session var mods per coro
 	array set varmod {}
-	::variable established		;# has this session been persisted?
+	variable established		;# has this session been persisted?
 	array set established {}
 
 	# create the local namespace within which all coros will be created
@@ -618,11 +604,11 @@ class create ::Session {
 	    }
 	}
 
-	if {$cookie ni [my db tables]} {
-	    error "Session requires a table named '$cookie', named for the session cookie"
+	if {$table ni [my db tables]} {
+	    error "Session requires a table named '$table'"
 	}
 
-	::variable max_prepcache 0	;# no limit to number of cached sql stmts
+	variable max_prepcache 0	;# no limit to number of cached sql stmts
 
 	# prepare some sql statemtents to NULL and UPDATE session vars
 	Debug.session {session provides vars '[my fields]'}
@@ -653,15 +639,17 @@ class create SimpleSession {
 	    set established($id) 1
 	}
 
-	::variable cookie
-	[my prep "INSERT INTO $cookie ($cookie,name,value) VALUES (:cookie,$cookie,:cookie)"] allrows -- [list cookie $id]
+	variable table
+	variable key
+	[my prep "INSERT INTO $table ($key,name,value) VALUES (:key,$key,:key)"] allrows -- [list key $id]
     }
 
     # fetch - fetch variables for session $id
     method fetch {id} {
-	::variable cookie
+	variable table
+	variable key
 	set record {}
-	[my prep "SELECT * FROM $cookie WHERE $cookie = :cookie"] foreach -as dicts -- rec [list cookie $id] {
+	[my prep "SELECT * FROM $table WHERE $key = :key"] foreach -as dicts -- rec [list key $id] {
 	    dict set record [dict get $rec name] [dict get $rec value]
 	}
 	variable fields; set fields [dict keys $record]
@@ -671,14 +659,15 @@ class create SimpleSession {
     # check - does session $id have any persistent records?
     method check {id} {
 	# check the state of this session
-	::variable cookie
-	set check [lindex [[my prep "SELECT count(*) FROM $cookie WHERE $cookie = :cookie"] allrows -- [list cookie $id]] 0]
+	variable table
+	variable key
+	set check [lindex [[my prep "SELECT count(*) FROM $table WHERE $key = :key"] allrows -- [list key $id]] 0]
 	Debug.session {CHECK $check}
 	return [expr {[lindex $check 1]>0}]
     }
 
     method fields {id} {
-	::variable fields
+	variable fields
 	return $fields($id)
     }
 
@@ -691,20 +680,21 @@ class create SimpleSession {
 	if {![llength $write] && ![llength $unset]} {
 	    return
 	}
-	::variable cookie
 
+	variable table
+	variable key
 	my db transaction {
 	    foreach field [dict keys $unset] {
-		if {$field eq $cookie} continue	;# skip modifications to cookie var
-		lappend result [[my prep "DELETE FROM $cookie SET $field = NULL WHERE $cookie = :cookie AND name=:name"] allrows -- [list cookie $id name $field]]
+		if {$field eq $key} continue	;# skip modifications to cookie var
+		lappend result [[my prep "DELETE FROM $table SET $field = NULL WHERE $key = :key AND name=:name"] allrows -- [list key $id name $field]]
 	    }
 
 	    foreach {field value} $write {
-		if {$field eq $cookie} continue	;# skip modifications to cookie var
+		if {$field eq $key} continue	;# skip modifications to cookie var
 		if {!$lazy} {
 		    set value [uplevel \#1 [list set $field]]
 		}
-		lappend result [[my prep "INSERT OR REPLACE INTO $cookie ($cookie,name,value) (:cookie,:name,:value)"] allrows -- [list cookie $id name $field value $value]]
+		lappend result [[my prep "INSERT OR REPLACE INTO $table ($key,name,value) (:key,:name,:value)"] allrows -- [list key $id name $field value $value]]
 	    }
 	}
 
@@ -714,7 +704,7 @@ class create SimpleSession {
 
     # variable - map variables to corovars
     method variable {args} {
-	::variable variables
+	variable variables
 	Debug.session {Session variable $args}
 	set id [namespace tail [info coroutine]]
 	if {[llength $args] == 1} {
