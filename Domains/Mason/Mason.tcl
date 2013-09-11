@@ -64,7 +64,7 @@ set ::API(Domains/Mason) {
 }
 
 class create ::Mason {
-    variable mount root hide functional notfound wrapper auth indexfile dirhead dirfoot aliases cache ctype nodir dirparams dateformat stream sortparam context
+    variable mount root hide functional notfound wrapper include auth indexfile dirhead dirfoot aliases cache ctype nodir dirparams dateformat stream sortparam context
 
     method conditional {req path} {
 	# check conditional
@@ -92,14 +92,10 @@ class create ::Mason {
 	return $result
     }
 
-    method template {req fpath} {
-	Debug.mason {template run: '$fpath' [dumpMsg $req]}
-
-	dict lappend req -depends $fpath ;# cache functional dependency
-
-	# read template into interpreter
-	if {[catch {
-	    set fd [open $fpath]
+    # read template into interpreter
+    method read_template {req path} {
+	try {
+	    set fd [open $path]
 	    set enc [dict get? $req -encoding]
 	    if {$enc ne ""} {
 		chan configure $fd -encoding $enc
@@ -109,10 +105,36 @@ class create ::Mason {
 	    set template [read $fd]
 	    close $fd
 	    Debug.mason {template code: $template}
-	} r eo]} {
+	} on error {e eo} {
 	    Debug.mason {template error: $r ($eo)}
 	    catch {close $fd}
-	    return [Http ServerError $req $r $eo]
+	    return -options $eo $e
+	}
+
+	return $template
+    }
+
+    method template {req fpath {ipath ""}} {
+	Debug.mason {template run: '$fpath' [dumpMsg $req]}
+
+	dict lappend req -depends $fpath ;# cache functional dependency
+
+	# read the template
+	try {
+	    set template [my read_template $req $fpath]
+	} on error {e eo} {
+	    return [Http ServerError $req $e $eo]
+	}
+
+	# read any include file specified
+	set incl ""
+	if {$ipath ne ""} {
+	    try {
+		set incl [my read_template $req $ipath]
+	    } on error {e eo} {
+		return [Http ServerError $req $e $eo]
+	    }
+	    set template "\[$incl\]$template"
 	}
 
 	# set some variables
@@ -156,7 +178,10 @@ class create ::Mason {
     }
 
     method functional {req fpath} {
-	set rsp [my template $req $fpath]
+	# find the .include file and prepend it
+	set ipath [my findUp $req $include]
+
+	set rsp [my template $req $fpath $ipath]
 	Debug.mason {Mason Functional ($fpath): [dumpMsg $rsp]}
 
 	# determine whether content is dynamic or not
@@ -505,6 +530,7 @@ class create ::Mason {
 	set notfound ".notfound"	;# notfound handler name
 	set wrapper ".after"		;# wrapper handler name
 	set auth ".before"		;# authentication functional
+	set include ".include"		;# script to be prepended to each page
 	set indexfile index.html	;# directory index name
 
 	set dirhead {name size mtime *}
