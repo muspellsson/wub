@@ -500,13 +500,12 @@ class create ::Session {
 
 	    # create new session id
 	    ::variable uniq; set id [::md5::md5 -hex [self][incr uniq][clock microseconds]]
-	    #variable inserter; $inserter allrows -- [list cookie $id]	;# add new session record
 
 	    # create the cookie
 	    ::variable cpath; ::variable expires; ::variable cookie_args;
 	    set r [Cookies Add $r -path $cpath -expires $expires {*}$cookie_args -name $cookie -value $id]
 	    set established($id) 0
-	    Debug.session {new session: $id}
+	    Debug.session {new session: $id - cookies [dict get $r -cookies]}
 	} else {
 	    # We have been given the session cookie
 	    set id [dict get [Cookies Fetch $r -name $cookie] -value]
@@ -640,7 +639,7 @@ class create ::Session {
 	::variable max_prepcache 0	;# no limit to number of cached sql stmts
 
 	# prepare some sql statemtents to NULL and UPDATE session vars
-	Debug.session {session provides vars '$fields'}
+	Debug.session {session provides vars '[my fields]'}
 
 	if {$lazy} {
 	    after [expr {$lazy * 1000}] [list [self] flush_lazy]
