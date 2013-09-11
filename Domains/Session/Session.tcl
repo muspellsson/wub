@@ -396,7 +396,7 @@ class create ::Session {
 		set r [uplevel 1 [list $handler([info coroutine]) do $r]]
 
 		if {!$lazy} {
-		    Debug.session {assiduous (non-lazy) flush}
+		    Debug.session {assiduous (non-lazy) flush $id}
 		    my flush $id {*}[my varmod]	;# write back session variable changes
 		}
 	    }
@@ -428,6 +428,7 @@ class create ::Session {
 	    set id [namespace tail $id]
 	}
 	Debug.session {establishing $id}
+
 	variable established
 	if {$established($id)} {
 	    Debug.session {establish $id - already established}
@@ -438,7 +439,7 @@ class create ::Session {
 	set result [[my prep "INSERT INTO $cookie ($cookie) VALUES (:cookie)"] allrows -- [list cookie $id]]
 	set established($id) 1
 
-	Debug.session {establish 'INSERT INTO $cookie ($cookie) VALUES ($id)' $id -> $result}
+	Debug.session {established 'INSERT INTO $cookie ($cookie) VALUES ($id)' -> $result}
     }
 
     # Establish - set up a session record for $id
@@ -493,7 +494,7 @@ class create ::Session {
 	# fetch or create a cookie session identifier
 	Debug.session {session cookie $cookie: [Cookies Fetch? $r -name $cookie] / ([dict get $r -cookies])}
 	set id [Cookies Fetch? $r -name $cookie]
-	variable established; set established($id) 0
+	variable established
 	if {$id eq ""} {
 	    # There is no session cookie - create a new session, id, and cookie
 	    Debug.session {create new session}
@@ -505,9 +506,10 @@ class create ::Session {
 	    # create the cookie
 	    ::variable cpath; ::variable expires; ::variable cookie_args;
 	    set r [Cookies Add $r -path $cpath -expires $expires {*}$cookie_args -name $cookie -value $id]
+	    set established($id) 0
 	    Debug.session {new session: $id}
 	} else {
-	    # We have the session cookie
+	    # We have been given the session cookie
 	    set id [dict get [Cookies Fetch $r -name $cookie] -value]
 	    Debug.session {session cookie: $id}
 	}
