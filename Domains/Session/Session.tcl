@@ -445,27 +445,26 @@ class create ::Session {
     # Establish - set up a session record for $id
     method Establish {id} {
 	::variable cookie
-
+	::variable established
 	# check the state of the session
 	set stored [my fetch $id]
 	switch -- [my check $id],[dict exists $stored $cookie] {
 	    0,0 {
 		# no record for this session
-		variable establish
+		::variable establish
+		set established($id) 0
 		if {$establish} {
 		    Debug.session {No data for $id - make some}
 		    my establish $id
-
 		    Debug.session {CHECK [my check $id]}
 		} else {
 		    Debug.session {No data for $id - no establishment}
-		    variable established; set established($id) 0
 		}
 	    }
 	    1,1 {
 		# the session is persistent *and* has data
 		Debug.session {session $id has data ($stored)}
-		variable established; set established($id) 1
+		set established($id) 1
 	    }
 	    1,0 -
 	    0,1 -
@@ -661,6 +660,7 @@ class create SimpleSession {
 	}
 	Debug.session {establishing $id}
 	set id [namespace tail [info coroutine]]
+
 	variable established
 	if {$established($id)} {
 	    return	;# already established
