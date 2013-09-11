@@ -86,7 +86,8 @@ class create ::Session {
 
     # establish - establish/persist *this* session
     classmethod establish {} {
-	uplevel #1 my close [info coroutine]	;# redirect to Session instance
+	Debug.session {called classmethod establish}
+	uplevel #1 my establish	;# redirect to Session instance
     }
 
     # Session variable - map a session variable into local scope
@@ -169,11 +170,8 @@ class create ::Session {
     }
 
     # variables - the set of session variables
-    classmethod variables {{session ""}} {	# access from within a session
-	if {$session eq ""} {
-	    return [uplevel #1 my variables [info coroutine]]	;# redirect to session instance
-	} else {
-	}
+    classmethod variables {} {	# access from within a session
+	return [uplevel #1 my variables [info coroutine]]	;# redirect to session instance
     }
     method variables {session} {
 	::variable variables; return $variables($session)
@@ -209,37 +207,40 @@ class create ::Session {
 	    Debug.session {varmod summary [info coroutine] $result}
 	    return $result
 	}
-
-	lassign $args id name1 name2 op
-	Debug.session {varmod [string toupper $op]: [info coroutine]/[namespace current] $args}
-	puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
-	::variable cookie
-	if {$name1 eq $cookie} {
-	    # the user has tried to modify the session variable
-	    # reset it to what it should be, and error.
-	    set session_var [uplevel #1 [list set $cookie $id]]
-	    if {$op eq "unset"} {
-		# have to re-establish the trace
-		uplevel #1 [list ::trace add variable $name1 {write unset} [list [my self] varmod $id]]
-		# we can't error out of an unset ... oh well
-	    }
-	    error "if you modify the session variable, you're not gonna have a good time."
-	}
-	::variable lazy
-	switch -- $op {
-	    write {
-		if {$lazy} {
-		    # store the values for later writing to db
-		    dict set varmod([info coroutine]) write $name1 [uplevel #1 [list set $name1]]
-		} else {
-		    dict set varmod([info coroutine]) write $name1 1
+	if {[catch {
+	    lassign $args id name1 name2 op
+	    Debug.session {varmod [string toupper $op]: [info coroutine]/[namespace current] $args}
+	    puts stderr "VARMOD [info coroutine] [info frame -1]/[info frame -2]/[info frame -3]"
+	    ::variable cookie
+	    if {0 && $name1 eq $cookie} {
+		# the user has tried to modify the session variable
+		# reset it to what it should be, and error.
+		set session_var [uplevel #1 [list set $cookie $id]]
+		if {$op eq "unset"} {
+		    # have to re-establish the trace
+		    uplevel #1 [list ::trace add variable $name1 {write unset} [list [my self] varmod $id]]
+		    # we can't error out of an unset ... oh well
 		}
-		catch {dict unset varmod([info coroutine]) unset $name1}
+		error "if you modify the session variable, you're not gonna have a good time."
 	    }
-	    unset {
-		dict set varmod([info coroutine]) unset $name1 1
-		catch {dict unset varmod([info coroutine]) write $name1}
+	    ::variable lazy
+	    switch -- $op {
+		write {
+		    if {$lazy} {
+			# store the values for later writing to db
+			dict set varmod([info coroutine]) write $name1 [uplevel #1 [list set $name1]]
+		    } else {
+			dict set varmod([info coroutine]) write $name1 1
+		    }
+		    catch {dict unset varmod([info coroutine]) unset $name1}
+		}
+		unset {
+		    dict set varmod([info coroutine]) unset $name1 1
+		    catch {dict unset varmod([info coroutine]) write $name1}
+		}
 	    }
+	} e eo]} {
+	    Debug.error {Session [self] varmod [info coroutine] $id $args ERROR '$e' ($eo)}
 	}
     }
 
@@ -296,11 +297,16 @@ class create ::Session {
 
     # flush - write back session variable changes
     method flush {id args} {
-	variable established; if {!$established($id)} return
+	variable established
+	if {!$established($id)} {
+	    Debug.session {flush $id not established, not flushing}
+	    return
+	}
 
 	set write {}; set unset {}
 	dict with args {}
 	if {![llength $write] && ![llength $unset]} {
+	    Debug.session {flush $id nothing to flush}
 	    return
 	}
 	::variable cookie
@@ -324,10 +330,10 @@ class create ::Session {
 
 	# prepared db command nulls field
 	dict set values cookie $id
-	Debug.session {'UPDATE $cookie SET [join $vars ,] WHERE $cookie = $id' over ($values)}
+	Debug.session {flush 'UPDATE $cookie SET [join $vars ,] WHERE $cookie = $id' over ($values)}
 	set result [[my prep "UPDATE $cookie SET [join $vars ,] WHERE $cookie = :cookie"] allrows -- $values]
 
-	Debug.session {shim wrote back $result}
+	Debug.session {flushed $result}
     }
 
     # name of all known session $id variables
@@ -359,7 +365,7 @@ class create ::Session {
 		set r [::yieldm $r]
 		if {![llength $r]} break
 		set r [lindex $r 0]
-		Debug.session {[info coroutine] got ($r)}
+		Debug.session {[info coroutine] running}
 
 		set active([info coroutine]) [clock seconds]
 		incr counter([info coroutine])
@@ -416,12 +422,12 @@ class create ::Session {
 
     # establish - create a minimal record for session
     method establish {{id ""}} {
-	Debug.session {establishing $id}
 	if {$id eq ""} {
 	    set id [namespace tail [info coroutine]]
-	} elseif {$id ne [namespace tail [info coroutine]]} {
-	    error "Can't establish a different session"
+	} else {
+	    set id [namespace tail $id]
 	}
+	Debug.session {establishing $id}
 	variable established
 	if {$established($id)} {
 	    Debug.session {establish $id - already established}
@@ -451,7 +457,7 @@ class create ::Session {
 
 		    Debug.session {CHECK [my check $id]}
 		} else {
-		    Debug.session {No data for $id - no establish}
+		    Debug.session {No data for $id - no establishment}
 		    variable established; set established($id) 0
 		}
 	    }
@@ -503,7 +509,7 @@ class create ::Session {
 	} else {
 	    # We have the session cookie
 	    set id [dict get [Cookies Fetch $r -name $cookie] -value]
-	    Debug.session {fetched session cookie: $id}
+	    Debug.session {session cookie: $id}
 	}
 
 	# find active session with $id
@@ -518,6 +524,10 @@ class create ::Session {
 
 	    ::coroutine $coro [self] shim	;# create coro shim with handler
 	    trace add command $coro delete [list [self] corodead]
+	} else {
+	    # the coro's running
+	    ::variable established
+	    Debug.session {existing coro.  established? $established($id)}
 	}
 
 	# call the handler shim to process the request
@@ -644,9 +654,11 @@ class create SimpleSession {
     method establish {id} {
 	if {$id eq ""} {
 	    set id [namespace tail [info coroutine]]
-	} elseif {$id ne [namespace tail [info coroutine]]} {
-	    error "Can't establish a different session"
+	} else {
+	    set id [namespace tail $id]
 	}
+	Debug.session {establishing $id}
+	set id [namespace tail [info coroutine]]
 	variable established
 	if {$established($id)} {
 	    return	;# already established
