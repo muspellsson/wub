@@ -357,9 +357,21 @@ class create ::Session {
 		    }
 		}
 
+		# run pre-handler script if any
+		variable pre
+		if {[info exists pre]} {
+		    set r [uplevel 1 [list ::apply [list {r} $pre [namespace current]] $r]]
+		}
+
 		# handle the request - if handler disappears, we're done
 		Debug.session {coro invoking: $handlers([dict get $r -section])}
 		set r [uplevel 1 [list $handlers([dict get $r -section]) do $r]]
+
+		# run post-handler script if any
+		variable post
+		if {[info exists post]} {
+		    set r [uplevel 1 [list ::apply [list {r} $post [namespace current]] $r]]
+		}
 
 		if {!$lazy} {
 		    Debug.session {assiduous (non-lazy) flush $id}
@@ -554,6 +566,8 @@ class create ::Session {
 
 	variable lazy 0			;# set lazy to number of seconds to flush *only* periodically
 	variable establish 1		;# auto-establish a persistent record for each new session?
+	#variable pre			;# an apply body to run before domain handling
+	#variable post			;# an apply body to run after domain handling
 
 	variable {*}[Site var? Session]	;# allow .config file to modify defaults
 	variable {*}$args
