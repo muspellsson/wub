@@ -1617,6 +1617,7 @@ oo::class create ::Httpd {
 	    set r $proto	;# start with blank request
 	    dict set r -transaction [incr transaction]
 	    dict set r -time connected $start	;# when we got connected - for timestamping
+	    dict set r -received_seconds [clock seconds]
 
 	    # read the header and unpack the header line
 	    # parse and merge header lines into request dict
