@@ -320,6 +320,7 @@ class create ::Session {
 	    set id [namespace tail [info coroutine]]
 	    set r {}
 	    while {[info exists handler([info coroutine])]} {
+		Debug.session {[info coroutine] yielding}
 		set r [::yieldm $r]
 		if {![llength $r]} break
 		set r [lindex $r 0]
@@ -336,7 +337,7 @@ class create ::Session {
 		if {![info exists variables([info coroutine])]} {
 		    set vars [my fetch $id]
 		    dict set vars $key $id	;# the session var always exists
-		    Debug.session {shim $handler([info coroutine]) VARS ([my fields $id]) fetched ($vars)}
+		    Debug.session {coro $handler([info coroutine]) VARS ([my fields $id]) fetched ($vars)}
 		    foreach n [my fields $id] {
 			Debug.session {shim $handler([info coroutine]) var $n}
 			catch {uplevel #1 [list ::trace remove variable $n {write unset} [list [my self] varmod $id]]}
@@ -352,6 +353,7 @@ class create ::Session {
 		}
 
 		# handle the request - if handler disappears, we're done
+		Debug.session {coro invoking: $handler([info coroutine])}
 		set r [uplevel 1 [list $handler([info coroutine]) do $r]]
 
 		if {!$lazy} {
@@ -360,6 +362,7 @@ class create ::Session {
 		}
 	    }
 	} [namespace current]]
+	Debug.session {[info coroutine] TERMINATING}
     }
 
     # fetch - fetch variables for session $id
@@ -489,12 +492,15 @@ class create ::Session {
 	    trace add command $coro delete [list [self] corodead]
 	} else {
 	    # the coro's running
+	    variable handler; variable handlers
+	    set handler($coro) $handlers([dict get $r -section])	;# get handler
 	    variable established
 	    Debug.session {existing coro.  established? $established($id)}
 	}
 
 	# call the handler shim to process the request
 	dict set r -prefix [dict get $r -section]	;# adjust the prefix for indirection
+	Debug.session {calling $coro over -section [dict get $r -section]}
 	tailcall $coro $r
     }
     
@@ -513,7 +519,7 @@ class create ::Session {
     # create - create a named Domain supervised by this Session manager
     # called when the domain is created by Nub, which thinks this Session instance is a class
     method create {name args} {
-	Debug.session {constructing handler name:'$name' $args}
+	Debug.session {[self] constructing session handler name:'$name' $args}
 	set mount [dict get $args mount]
 	set domain [dict get $args domain]
 	package require $domain
@@ -611,8 +617,6 @@ class create ::Session {
 	variable max_prepcache 0	;# no limit to number of cached sql stmts
 
 	# prepare some sql statemtents to NULL and UPDATE session vars
-	Debug.session {session provides vars '[my fields]'}
-
 	if {$lazy} {
 	    after [expr {$lazy * 1000}] [list [self] flush_lazy]
 	}
