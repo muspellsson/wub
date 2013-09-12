@@ -55,7 +55,7 @@ set ::API(Session) {
 class create ::Session {
     # id - the current session id
     classmethod id {} {
-	namespace tail [info coroutine]
+	namespace tail [info coroutine]	;# returns the current session's id
     }
 
     # establish - establish/persist *this* session
@@ -86,6 +86,11 @@ class create ::Session {
 	variable active; array get active
     }
 
+    # established - the established state of sessions
+    method established {} {
+	variable established; array get established
+    }
+
     # sessionvar - return the name of the session variable
     classmethod sessionvar {} {
 	uplevel #1 my sessionvar	;# redirect to Session instance
@@ -101,19 +106,14 @@ class create ::Session {
     }
     method close {session} {
 	# close the named session
-	variable handler
-	unset handler($session)
+	variable terminate; set terminate($session) 1
     }
 
     # /close - Direct Domain closure of this session
     method /close {r} {
 	variable ::cookie
-	set id [namespace tail [info coroutine]]
-
 	# we are inside the subject domain, so can use their cookie
-	set id [dict get [Cookies Fetch $r -name $cookie] -value]
-	set coro [namespace current]::Coros::$id	;# remember session coro name
-	my close $coro
+	my close [my id]
     }
 
     # idle - return list of sessions idle longer than the proffered time
@@ -157,7 +157,7 @@ class create ::Session {
 
 	variable varmod
 	foreach coro [array names varmod] {
-	    my flush [namespace tail $coro] {*}$varmod($coro)
+	    my flush [my id] {*}$varmod($coro)
 	    unset varmod($coro)
 	}
 
@@ -217,9 +217,15 @@ class create ::Session {
 
     # corodead - the coroutine has died, clean up after it.
     method corodead {coro args} {
-	variable variables; catch {unset variables($coro)}
-	variable active; catch {unset active($coro)}
-	variable counter; catch {unset counter($coro)}
+	variable varmod; catch {unset varmod($coro)}
+
+	set id [namespace tail $coro]
+	variable variables; catch {unset variables($id)}
+	variable active; catch {unset active($id)}
+	variable terminate; catch {unset terminate($id)}
+	variable established; catch {unset established($id)}
+
+	Debug.session {corodead session $id}
     }
 
     # self - for the shim
@@ -311,35 +317,34 @@ class create ::Session {
     method shim {args} {
 	::apply [list {} {
 	    variable active	;# introspection - last session access
-	    variable counter	;# introspection - count of session accesses
 
-	    variable handler	;# request handlers by coroutine
 	    variable lazy	;# is this session_manager lazy?
 
-	    Debug.session {shim $handler([info coroutine]) START}
-	    set id [namespace tail [info coroutine]]
+	    Debug.session {shim [info coroutine] START}
+	    set id [my id]
 	    set r {}
-	    while {[info exists handler([info coroutine])]} {
+	    variable handlers
+	    variable terminate
+	    while {![info exists terminate($id)]} {
 		Debug.session {[info coroutine] yielding}
 		set r [::yieldm $r]
 		if {![llength $r]} break
 		set r [lindex $r 0]
 		Debug.session {[info coroutine] running}
 
-		set active([info coroutine]) [clock seconds]
-		incr counter([info coroutine])
+		set active($id) [clock seconds]
 
 		# fetch session variables by key
 		# do it only when we've got a real request
 		variable variables	;# introspect session var names
 		variable cookie		;# name of cookie
 		variable key
-		if {![info exists variables([info coroutine])]} {
+		if {![info exists variables($id)]} {
 		    set vars [my fetch $id]
 		    dict set vars $key $id	;# the session var always exists
-		    Debug.session {coro $handler([info coroutine]) VARS ([my fields $id]) fetched ($vars)}
+		    Debug.session {coro VARS ([my fields $id]) fetched ($vars)}
 		    foreach n [my fields $id] {
-			Debug.session {shim $handler([info coroutine]) var $n}
+			Debug.session {shim var $n}
 			catch {uplevel #1 [list ::trace remove variable $n {write unset} [list [my self] varmod $id]]}
 			if {[dict exists $vars $n]} {
 			    Debug.session {shim var assigning $n<-'[dict get $vars $n]'}
@@ -348,13 +353,13 @@ class create ::Session {
 			    catch {uplevel #1 [list unset $n]}
 			}
 			uplevel #1 [list ::trace add variable $n {write unset} [list [my self] varmod $id]]
-			lappend variables([info coroutine]) $n
+			lappend variables($id) $n
 		    }
 		}
 
 		# handle the request - if handler disappears, we're done
-		Debug.session {coro invoking: $handler([info coroutine])}
-		set r [uplevel 1 [list $handler([info coroutine]) do $r]]
+		Debug.session {coro invoking: $handlers([dict get $r -section])}
+		set r [uplevel 1 [list $handlers([dict get $r -section]) do $r]]
 
 		if {!$lazy} {
 		    Debug.session {assiduous (non-lazy) flush $id}
@@ -387,7 +392,7 @@ class create ::Session {
     # establish - create a minimal record for session
     method establish {{id ""}} {
 	if {$id eq ""} {
-	    set id [namespace tail [info coroutine]]
+	    set id [my id]
 	} else {
 	    set id [namespace tail $id]
 	}
@@ -482,9 +487,9 @@ class create ::Session {
 	set coro [namespace current]::Coros::$id	;# remember session coro name
 	if {![llength [info commands $coro]]} {
 	    # we don't have an active session for this id - create one
-	    variable handler; variable handlers
-	    set handler($coro) $handlers([dict get $r -section])	;# get handler
-	    Debug.session {create coro: $coro to handle $handler($coro) for session $id}
+	    variable handlers
+	    
+	    Debug.session {create coro: $coro for session $id}
 
 	    my Establish $id	; # create a session persistent record
 
@@ -492,8 +497,6 @@ class create ::Session {
 	    trace add command $coro delete [list [self] corodead]
 	} else {
 	    # the coro's running
-	    variable handler; variable handlers
-	    set handler($coro) $handlers([dict get $r -section])	;# get handler
 	    variable established
 	    Debug.session {existing coro.  established? $established($id)}
 	}
@@ -565,11 +568,14 @@ class create ::Session {
 
 	variable handlers		;# handlers created by this session manager
 	array set handlers {}
-	variable active		;# activity time per coro
+
+	variable terminate		;# terminate this coro peacefully
+	array set terminate {}
+	variable active			;# activity time per coro
 	array set active {}
 	variable variables		;# session variables per coro
 	array set variables {}
-	variable varmod		;# record session var mods per coro
+	variable varmod			;# record session var mods per coro
 	array set varmod {}
 	variable established		;# has this session been persisted?
 	array set established {}
@@ -629,12 +635,11 @@ class create SimpleSession {
     # establish - create a minimal record for session
     method establish {id} {
 	if {$id eq ""} {
-	    set id [namespace tail [info coroutine]]
+	    set id [my id]
 	} else {
 	    set id [namespace tail $id]
 	}
 	Debug.session {establishing $id}
-	set id [namespace tail [info coroutine]]
 
 	variable established
 	if {$established($id)} {
@@ -710,7 +715,7 @@ class create SimpleSession {
     method variable {args} {
 	variable variables
 	Debug.session {Session variable $args}
-	set id [namespace tail [info coroutine]]
+	set id [my id]
 	if {[llength $args] == 1} {
 	    set n [lindex $args 0]
 	    catch {uplevel #1 [list ::trace remove variable $n {write unset} [list [my self] varmod $id]]}
