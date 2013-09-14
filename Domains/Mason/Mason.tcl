@@ -141,10 +141,6 @@ class create ::Mason {
 	set response $req
 	catch {dict unset response -code}	;# let subst set -code value
 	#catch {dict unset response -content}	;# let subst set content
-	if {![dict exists $response content-type]} {
-	    # set default mime type
-	    dict set response content-type $ctype
-	}
 
 	# perform template substitution
 	variable context
@@ -162,6 +158,11 @@ class create ::Mason {
 	}
 	if {![dict exists $response -code]} {
 	    dict set response -code 200
+	}
+
+	if {![dict exists $response content-type]} {
+	    # set default mime type
+	    dict set response content-type $ctype
 	}
 
 	# implicit return value - use the substitution
