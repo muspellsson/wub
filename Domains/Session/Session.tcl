@@ -274,7 +274,7 @@ class create ::Session {
 		    variable reconnect
 		    if {[llength $reconnect]} {
 			my prep_purge
-			{*}$reconnect $e $eo
+			variable db; {*}$reconnect $db $e $eo
 		    } else {
 			return -options $eo $e
 		    }
@@ -288,7 +288,7 @@ class create ::Session {
 		variable reconnect
 		if {[llength $reconnect]} {
 		    my prep_purge
-		    {*}$reconnect $e $eo
+		    variable db; {*}$reconnect $db $e $eo
 		} else {
 		    return -options $eo $e
 		}
