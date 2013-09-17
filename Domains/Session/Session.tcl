@@ -258,6 +258,50 @@ class create ::Session {
 	return $s
     }
 
+    method prep_purge {} {
+	variable stmts	;# here are some statements we prepared earlier
+	set stmts {}
+    }
+
+    # exec - execute a statement over db
+    method exec {stmt args} {
+	set incomplete 1
+	while {$incomplete} {
+	    # try to prep a statement - reconnect on connection down
+	    set prepped ""
+	    while {$prepped eq ""} {
+		try {set prepped [my prep $stmt]} trap {TDBC REMOTE_DATABASE_ACCESS_ERROR} {e eo} {
+		    variable reconnect
+		    if {[llength $reconnect]} {
+			my prep_purge
+			{*}$reconnect $e $eo
+		    } else {
+			return -options $eo $e
+		    }
+		}
+	    }
+
+	    # try to execute the script around a prepped statement - reconnect on connection down
+	    try {
+		set result [uplevel 1 [list $prepped {*}$args]]
+	    } trap {TDBC REMOTE_DATABASE_ACCESS_ERROR} {e eo} {
+		variable reconnect
+		if {[llength $reconnect]} {
+		    my prep_purge
+		    {*}$reconnect $e $eo
+		} else {
+		    return -options $eo $e
+		}
+	    } on error {e eo} {
+		return -options $eo $e
+	    } on ok {} {
+		set incomplete 0
+	    }
+	}
+
+	return $result
+    }
+
     # flush - write back session variable changes
     method flush {id args} {
 	variable established
@@ -296,7 +340,7 @@ class create ::Session {
 	variable key
 	dict set values key $id
 	Debug.session {flush 'UPDATE $table SET [join $vars ,] WHERE $key = $id' over ($values)}
-	set result [[my prep "UPDATE $table SET [join $vars ,] WHERE $key = :key"] allrows -- $values]
+	set result [my exec "UPDATE $table SET [join $vars ,] WHERE $key = :key" allrows -- $values]
 
 	Debug.session {flushed $result}
     }
@@ -386,7 +430,7 @@ class create ::Session {
     method fetch {id} {
 	variable table
 	variable key
-	set result [lindex [[my prep "SELECT * FROM $table WHERE $key = :key"] allrows -as dicts -- [list key $id]] 0]
+	set result [lindex [my exec "SELECT * FROM $table WHERE $key = :key" allrows -as dicts -- [list key $id]] 0]
 	Debug.session {fetch ($result)}
 	return $result
     }
@@ -396,7 +440,7 @@ class create ::Session {
 	# check the state of this session
 	variable table
 	variable key
-	set check [lindex [[my prep "SELECT count(*) FROM $table WHERE $key = :key"] allrows -- [list key $id]] 0]
+	set check [lindex [my exec "SELECT count(*) FROM $table WHERE $key = :key" allrows -- [list key $id]] 0]
 	Debug.session {CHECK $check}
 	return [lindex $check 1]
     }
@@ -418,7 +462,7 @@ class create ::Session {
 
 	variable table
 	variable key
-	set result [[my prep "INSERT INTO $table ($key) VALUES (:key)"] allrows -- [list key $id]]
+	set result [my exec "INSERT INTO $table ($key) VALUES (:key)" allrows -- [list key $id]]
 	set established($id) 1
 
 	Debug.session {established 'INSERT INTO $table ($key) VALUES ($id)' -> $result}
@@ -552,6 +596,7 @@ class create ::Session {
 	Debug.session {constructing [self] $args}
 	variable tdbc sqlite3		;# TDBC backend
 	variable db ""			;# already open db
+	variable reconnect {}		;# cmd prefix called if remote DB disconnects
 	variable file ""		;# or db file
 	variable tdbc_opts {}		;# ::tdbc::connection creation options
 	variable schemafile ""		;# file containing schema
@@ -664,7 +709,7 @@ class create SimpleSession {
 
 	variable table
 	variable key
-	[my prep "INSERT INTO $table ($key,name,value) VALUES (:key,$key,:key)"] allrows -- [list key $id]
+	my exec "INSERT INTO $table ($key,name,value) VALUES (:key,$key,:key)" allrows -- [list key $id]
     }
 
     # fetch - fetch variables for session $id
@@ -672,7 +717,7 @@ class create SimpleSession {
 	variable table
 	variable key
 	set record {}
-	[my prep "SELECT * FROM $table WHERE $key = :key"] foreach -as dicts -- rec [list key $id] {
+	my exec "SELECT * FROM $table WHERE $key = :key" foreach -as dicts -- rec [list key $id] {
 	    dict set record [dict get $rec name] [dict get $rec value]
 	}
 	variable fields; set fields [dict keys $record]
@@ -684,7 +729,7 @@ class create SimpleSession {
 	# check the state of this session
 	variable table
 	variable key
-	set check [lindex [[my prep "SELECT count(*) FROM $table WHERE $key = :key"] allrows -- [list key $id]] 0]
+	set check [lindex [my exec "SELECT count(*) FROM $table WHERE $key = :key" allrows -- [list key $id]] 0]
 	Debug.session {CHECK $check}
 	return [expr {[lindex $check 1]>0}]
     }
@@ -709,7 +754,7 @@ class create SimpleSession {
 	my db transaction {
 	    foreach field [dict keys $unset] {
 		if {$field eq $key} continue	;# skip modifications to cookie var
-		lappend result [[my prep "DELETE FROM $table SET $field = NULL WHERE $key = :key AND name=:name"] allrows -- [list key $id name $field]]
+		lappend result [my exec "DELETE FROM $table SET $field = NULL WHERE $key = :key AND name=:name" allrows -- [list key $id name $field]]
 	    }
 
 	    foreach {field value} $write {
@@ -717,7 +762,7 @@ class create SimpleSession {
 		if {!$lazy} {
 		    set value [uplevel \#1 [list set $field]]
 		}
-		lappend result [[my prep "INSERT OR REPLACE INTO $table ($key,name,value) (:key,:name,:value)"] allrows -- [list key $id name $field value $value]]
+		lappend result [my exec "INSERT OR REPLACE INTO $table ($key,name,value) (:key,:name,:value)" allrows -- [list key $id name $field value $value]]
 	    }
 	}
 
